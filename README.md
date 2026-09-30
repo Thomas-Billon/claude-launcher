@@ -47,6 +47,15 @@ python claude_launcher.py -d <dossier>     # dossier racine ponctuel
 | Entrée | Lancer Claude Code dans le dossier sélectionné |
 | Échap / Ctrl+C | Quitter |
 
+## Mise à jour des skills
+
+Au démarrage, le launcher met à jour le repo [claude-skills](https://github.com/Thomas-Billon/claude-skills) avant d'afficher le menu, pour que Claude Code démarre avec les derniers skills et le dernier `CLAUDE.md` global :
+
+1. `git fetch` du repo, retrouvé via la cible de la jonction `~/.claude/skills/create-personal-skill`
+2. S'il est en retard sur sa branche distante : `git pull --ff-only`, puis `install.ps1` du repo
+
+Le résultat s'affiche sur la ligne `Skills` du menu. Un échec (hors ligne, pull refusé, repo introuvable) n'empêche pas le lancement.
+
 ## Fichiers locaux
 
 Non versionnés (`.gitignore`), propres à chaque machine :

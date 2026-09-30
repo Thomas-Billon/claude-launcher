@@ -10,6 +10,11 @@ absolute path) to sort most-recently-used folders first.
 The default directory to scan is read from claude_launcher.config.json next to
 this script (see claude_launcher.config.example.json), falling back to the
 user's home directory.
+
+On startup, the claude-skills repo (found through the junction of one of its
+installed skills) is fetched; when behind its upstream, it is fast-forward
+pulled and its install.ps1 is run so skills and the global CLAUDE.md are up
+to date before Claude Code starts.
 """
 
 import argparse
@@ -25,6 +30,11 @@ from pathlib import Path
 SCRIPT_DIR = Path(__file__).resolve().parent
 HISTORY_FILE = SCRIPT_DIR / "claude_launcher_history.json"
 CONFIG_FILE = SCRIPT_DIR / "claude_launcher.config.json"
+
+# INFO: The claude-skills repo path varies per machine, so it is deduced from the target of a junction its install.ps1 creates
+SKILLS_JUNCTION = Path.home() / ".claude" / "skills" / "create-personal-skill"
+GIT_TIMEOUT_SECONDS = 10
+INSTALL_WARNINGS_MARKER = "__INSTALL_WARNINGS__"
 
 KEY_UP = b"H"
 KEY_DOWN = b"P"
@@ -93,6 +103,84 @@ def save_history(history):
         json.dump(history, history_file, indent=2)
 
 
+def find_skills_repo():
+    if not SKILLS_JUNCTION.exists():
+        return None
+
+    repo = SKILLS_JUNCTION.resolve().parent
+
+    return repo if (repo / ".git").exists() else None
+
+
+def run_command(command, cwd, timeout=None):
+    # INFO: GIT_TERMINAL_PROMPT=0 makes git fail instead of hanging on a credential prompt
+    environment = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
+
+    return subprocess.run(
+        command,
+        cwd=cwd,
+        env=environment,
+        capture_output=True,
+        text=True,
+        errors="replace",
+        timeout=timeout,
+    )
+
+
+def build_install_command(install_script):
+    # INFO: Warnings are read from the warning stream rather than the output text, which PowerShell localizes
+    escaped_path = str(install_script).replace("'", "''")
+    script = (
+        f"$warnings = & '{escaped_path}' 3>&1 | Where-Object {{ $_ -is [System.Management.Automation.WarningRecord] }}; "
+        "if ($LASTEXITCODE) { exit $LASTEXITCODE }; "
+        f"if ($warnings) {{ Write-Output '{INSTALL_WARNINGS_MARKER}' }}"
+    )
+
+    return ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script]
+
+
+def update_skills_repo():
+    repo = find_skills_repo()
+
+    if repo is None:
+        return "claude-skills repo not found", DARK_GRAY
+
+    print(colorize("Checking claude-skills updates…", DARK_GRAY))
+
+    try:
+        if run_command(["git", "fetch", "--quiet"], repo, GIT_TIMEOUT_SECONDS).returncode != 0:
+            return "update failed (fetch error)", YELLOW
+
+        behind = run_command(["git", "rev-list", "--count", "HEAD..@{u}"], repo)
+
+        if behind.returncode != 0:
+            return "update failed (no upstream branch)", YELLOW
+
+        commit_count = int(behind.stdout.strip())
+
+        if commit_count == 0:
+            return "up to date", DARK_GRAY
+
+        if run_command(["git", "pull", "--ff-only", "--quiet"], repo, GIT_TIMEOUT_SECONDS).returncode != 0:
+            return "update failed (pull refused)", YELLOW
+
+        install = run_command(build_install_command(repo / "install.ps1"), repo)
+    except subprocess.TimeoutExpired:
+        return "update failed (git timed out)", YELLOW
+    except OSError:
+        return "update failed (git not found)", YELLOW
+
+    commits = f"{commit_count} new commit{'s' if commit_count > 1 else ''}"
+
+    if install.returncode != 0:
+        return f"pulled {commits} but install.ps1 failed", YELLOW
+
+    if INSTALL_WARNINGS_MARKER in install.stdout:
+        return f"updated ({commits}), install.ps1 reported warnings", YELLOW
+
+    return f"updated ({commits})", GREEN
+
+
 def get_subfolder_names(current_dir):
     if not current_dir.is_dir():
         return []
@@ -123,7 +211,8 @@ def get_scroll_offset(scroll_offset, selected_index, visible_rows, item_count):
     return max(0, min(scroll_offset, item_count - visible_rows))
 
 
-def render_menu(current_dir, folder_names, selected_index, scroll_offset):
+def render_menu(current_dir, folder_names, selected_index, scroll_offset, skills_status):
+    skills_text, skills_color = skills_status
     width, height = shutil.get_terminal_size()
     # INFO: The last column is left empty so the console never wraps a line, which would break the row count
     max_length = width - 1
@@ -133,6 +222,7 @@ def render_menu(current_dir, folder_names, selected_index, scroll_offset):
         colorize(truncate("  Claude Code Launcher", max_length), CYAN),
         colorize(truncate(f"  {'=' * 40}", max_length), DARK_CYAN),
         colorize(truncate(f"  Directory : {current_dir}", max_length), DARK_GRAY),
+        colorize(truncate(f"  Skills    : {skills_text}", max_length), skills_color),
         "",
     ]
     footer = ["", colorize(truncate(HELP_TEXT, max_length), DARK_GRAY)]
@@ -179,7 +269,7 @@ def read_key():
     return first_byte
 
 
-def prompt_for_folder(initial_dir, history):
+def prompt_for_folder(initial_dir, history, skills_status):
     current_dir = initial_dir
     selected_index = 0
     scroll_offset = 0
@@ -190,7 +280,7 @@ def prompt_for_folder(initial_dir, history):
 
     try:
         while True:
-            scroll_offset = render_menu(current_dir, folder_names, selected_index, scroll_offset)
+            scroll_offset = render_menu(current_dir, folder_names, selected_index, scroll_offset, skills_status)
             key = read_key()
 
             if key == KEY_UP and folder_names:
@@ -245,8 +335,9 @@ def main():
 
         return 1
 
+    skills_status = update_skills_repo()
     history = load_history()
-    selected_path = prompt_for_folder(initial_dir, history)
+    selected_path = prompt_for_folder(initial_dir, history, skills_status)
 
     if selected_path is None:
         os.system("cls")

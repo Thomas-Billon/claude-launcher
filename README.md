@@ -12,11 +12,14 @@ Le launcher fait choisir un compte Claude, liste ensuite les 5 derniers dossiers
 
 ## Installation
 
-Créer le raccourci « Claude Code » dans le menu Démarrer :
-
 ```powershell
 ./install.ps1
 ```
+
+Le script :
+
+1. crée le raccourci « Claude Code » dans le menu Démarrer ;
+2. demande si un repo de skills partagés doit être utilisé (`Y/N`), puis son chemin local (voir [Mise à jour des skills](#mise-à-jour-des-skills-optionnel)). Le choix est enregistré dans `config.json`. Si ce fichier existe déjà, le script affiche le réglage actuel et propose de le garder.
 
 Les chemins du raccourci sont déduits de l'emplacement du repo : relancer le script après un déplacement du repo ou sur une nouvelle machine. Le raccourci peut ensuite être épinglé à la barre des tâches.
 
@@ -66,24 +69,26 @@ Chaque compte a son propre dossier de configuration Claude Code, `~/.claude-acco
 
 ### Configuration partagée
 
-`~/.claude` reste la base commune, maintenue par le `install.ps1` de claude-skills. Aucun compte ne s'y connecte. Le dossier de chaque compte y fait référence :
+`~/.claude` reste la base commune (alimentée par exemple par le repo de skills partagés). Aucun compte ne s'y connecte. Le dossier de chaque compte y fait référence :
 
 | Élément | Partage |
 |---------|---------|
 | `skills/`, `plugins/` | Jonctions vers `~/.claude` |
-| `CLAUDE.md` | Une seule ligne `@~/.claude/CLAUDE.md`, qui importe le relais vers claude-skills |
+| `CLAUDE.md` | Une seule ligne `@~/.claude/CLAUDE.md`, qui importe le `CLAUDE.md` global |
 | `settings.json` | Passé à chaque lancement via `claude --settings ~/.claude/settings.json` |
 
 Les réglages passés par `--settings` priment sur ceux des projets et du compte : pour qu'un réglage s'applique à tous les comptes, le modifier dans `~/.claude/settings.json`.
 
-## Mise à jour des skills
+## Mise à jour des skills (optionnel)
 
-Au démarrage, le launcher met à jour le repo [claude-skills](https://github.com/Thomas-Billon/claude-skills) avant d'afficher le menu, pour que Claude Code démarre avec les derniers skills et le dernier `CLAUDE.md` global :
+Si un repo de skills partagés est renseigné dans `config.json` (par exemple [claude-skills](https://github.com/Thomas-Billon/claude-skills)), le launcher le met à jour au démarrage, avant d'afficher le menu, pour que Claude Code démarre avec les derniers skills et le dernier `CLAUDE.md` global :
 
-1. `git fetch` du repo, retrouvé via la cible de la jonction `~/.claude/skills/create-personal-skill`
-2. S'il est en retard sur sa branche distante : `git pull --ff-only`, puis `install.ps1` du repo
+1. `git fetch` du repo
+2. S'il est en retard sur sa branche distante : `git pull --ff-only`, puis son `install.ps1` s'il en a un
 
-Le résultat s'affiche sur la ligne `Skills` des menus. Un échec (hors ligne, pull refusé, repo introuvable) n'empêche pas le lancement.
+Le résultat s'affiche sur la ligne `Skills` des menus. Un échec (hors ligne, pull refusé, repo introuvable) n'empêche pas le lancement. Sans repo configuré, l'étape est ignorée et la ligne `Skills` n'apparaît pas.
+
+Pour activer, changer ou désactiver le repo : relancer `./install.ps1`.
 
 ## Fichiers locaux
 
@@ -92,3 +97,4 @@ Non versionnés (`.gitignore`), propres à chaque machine :
 | Fichier | Rôle |
 |---------|------|
 | `*.lnk` | Raccourcis générés par `install.ps1` |
+| `config.json` | Chemin local du repo de skills partagés (`skills_repo`, `null` si désactivé), écrit par `install.ps1` |

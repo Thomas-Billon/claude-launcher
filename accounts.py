@@ -8,7 +8,7 @@ never reads them and stores no email address. Labels come from the profile
 Claude Code keeps in each account directory (.claude.json), which is read
 instantly, unlike `claude auth status` which is only used to confirm a login.
 
-~/.claude stays the shared base maintained by the claude-skills repo: each
+~/.claude stays the shared base (fed by the shared skills repo, if any): each
 account directory links its skills and plugins through junctions, imports its
 CLAUDE.md, and receives its settings.json through `claude --settings`.
 """

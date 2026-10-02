@@ -1,10 +1,10 @@
 """
 Interactive launcher that starts Claude Code with a chosen account in a chosen project directory.
 
-On startup, the claude-skills repo (found through the junction of one of its
-installed skills) is fetched; when behind its upstream, it is fast-forward
-pulled and its install.ps1 is run so skills and the global CLAUDE.md are up
-to date before Claude Code starts.
+On startup, the shared skills repo set in config.json (written by install.ps1)
+is fetched; when behind its upstream, it is fast-forward pulled and its
+install.ps1, if any, is run so skills and the global CLAUDE.md are up to date
+before Claude Code starts. Without a configured repo, this step is skipped.
 
 The Claude account is then picked (see accounts.py): Up/Down to highlight,
 Enter to use it (logging in when needed), Right to open its options (use or
@@ -21,6 +21,7 @@ the account (see accounts.py), else from the user's home directory.
 """
 
 import argparse
+import json
 import os
 import subprocess
 import sys
@@ -56,8 +57,8 @@ from terminal_ui import (
     truncate,
 )
 
-# INFO: The claude-skills repo path varies per machine, so it is deduced from the target of a junction its install.ps1 creates
-SKILLS_JUNCTION = Path.home() / ".claude" / "skills" / "create-personal-skill"
+# INFO: Written by install.ps1, not versioned since the skills repo path varies per machine
+CONFIG_FILE = Path(__file__).resolve().parent / "config.json"
 GIT_TIMEOUT_SECONDS = 10
 INSTALL_WARNINGS_MARKER = "__INSTALL_WARNINGS__"
 
@@ -88,13 +89,13 @@ BACK = object()
 QUIT = object()
 
 
-def find_skills_repo():
-    if not SKILLS_JUNCTION.exists():
+def load_skills_repo():
+    try:
+        skills_repo = json.loads(CONFIG_FILE.read_text(encoding="utf-8")).get("skills_repo")
+    except (OSError, json.JSONDecodeError, AttributeError):
         return None
 
-    repo = SKILLS_JUNCTION.resolve().parent
-
-    return repo if (repo / ".git").exists() else None
+    return Path(skills_repo) if skills_repo else None
 
 
 def run_command(command, cwd, timeout=None):
@@ -124,11 +125,9 @@ def build_install_command(install_script):
     return ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script]
 
 
-def update_skills_repo():
-    repo = find_skills_repo()
-
-    if repo is None:
-        return "claude-skills repo not found", DARK_GRAY
+def update_skills_repo(repo):
+    if not (repo / ".git").exists():
+        return "configured repo not found", YELLOW
 
     try:
         if run_command(["git", "fetch", "--quiet"], repo, GIT_TIMEOUT_SECONDS).returncode != 0:
@@ -147,13 +146,17 @@ def update_skills_repo():
         if run_command(["git", "pull", "--ff-only", "--quiet"], repo, GIT_TIMEOUT_SECONDS).returncode != 0:
             return "update failed (pull refused)", YELLOW
 
-        install = run_command(build_install_command(repo / "install.ps1"), repo)
+        install_script = repo / "install.ps1"
+        install = run_command(build_install_command(install_script), repo) if install_script.is_file() else None
     except subprocess.TimeoutExpired:
         return "update failed (git timed out)", YELLOW
     except OSError:
         return "update failed (git not found)", YELLOW
 
     commits = f"{commit_count} new commit{'s' if commit_count > 1 else ''}"
+
+    if install is None:
+        return f"updated ({commits})", GREEN
 
     if install.returncode != 0:
         return f"pulled {commits} but install.ps1 failed", YELLOW
@@ -199,10 +202,14 @@ def render_screen(details, render_body=None, help_text=None, message=None):
     draw(header + body + footer)
 
 
-def get_skills_detail(skills_status):
+def get_skills_details(skills_status):
+    # INFO: No status means no shared skills repo is configured, the header then has no Skills line
+    if skills_status is None:
+        return []
+
     skills_text, skills_color = skills_status
 
-    return "Skills", skills_text, skills_color
+    return [("Skills", skills_text, skills_color)]
 
 
 def get_account_detail(account):
@@ -243,7 +250,7 @@ def render_account_menu(selection, options, skills_status, message, help_text):
             left_width,
         )
 
-    render_screen([get_skills_detail(skills_status)], render_body, help_text, message)
+    render_screen(get_skills_details(skills_status), render_body, help_text, message)
 
 
 def build_account_selection(account_list, selected_id):
@@ -328,7 +335,7 @@ def build_history_selection(account, selected_index=0):
 
 
 def prompt_for_account(skills_status, selected_id=None):
-    render_screen([get_skills_detail(skills_status), ("Account", "loading…", DARK_GRAY)])
+    render_screen([*get_skills_details(skills_status), ("Account", "loading…", DARK_GRAY)])
 
     account_list = accounts.load_accounts()
     selection = build_account_selection(account_list, selected_id)
@@ -472,7 +479,7 @@ def render_folder_menu(current_dir, selection, has_subfolders, skills_status, ac
 
         return selection.render(max(available_rows - 1, MIN_LIST_ROWS), max_length) + [no_subfolders]
 
-    details = [get_skills_detail(skills_status), get_account_detail(account), ("Directory", current_dir, DARK_GRAY)]
+    details = [*get_skills_details(skills_status), get_account_detail(account), ("Directory", current_dir, DARK_GRAY)]
     render_screen(details, render_body, help_text, message)
 
 
@@ -527,8 +534,12 @@ def cancel():
 
 def pick_launch_target(argument_dir):
     """Runs the launcher steps, each one adding its line to the header, and returns the chosen account and folder."""
-    render_screen([("Skills", "checking updates…", DARK_GRAY)])
-    skills_status = update_skills_repo()
+    skills_repo = load_skills_repo()
+    skills_status = None
+
+    if skills_repo is not None:
+        render_screen([("Skills", "checking updates…", DARK_GRAY)])
+        skills_status = update_skills_repo(skills_repo)
     account = None
 
     while True:
@@ -549,7 +560,7 @@ def pick_launch_target(argument_dir):
 
     accounts.record_launch(account, selected_path)
 
-    details = [get_skills_detail(skills_status), get_account_detail(account), ("Directory", selected_path, GREEN)]
+    details = [*get_skills_details(skills_status), get_account_detail(account), ("Directory", selected_path, GREEN)]
     render_screen(details)
 
     return account, selected_path

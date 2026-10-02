@@ -142,7 +142,7 @@ def update_skills_repo():
         commit_count = int(behind.stdout.strip())
 
         if commit_count == 0:
-            return "up to date", DARK_GRAY
+            return "up to date", GREEN
 
         if run_command(["git", "pull", "--ff-only", "--quiet"], repo, GIT_TIMEOUT_SECONDS).returncode != 0:
             return "update failed (pull refused)", YELLOW
@@ -206,7 +206,7 @@ def get_skills_detail(skills_status):
 
 
 def get_account_detail(account):
-    return "Account", account.label, DARK_GRAY
+    return "Account", account.label, GREEN
 
 
 def run_interactive_login(account):

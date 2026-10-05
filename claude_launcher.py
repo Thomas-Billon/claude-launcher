@@ -4,7 +4,9 @@ Interactive launcher that starts Claude Code with a chosen account in a chosen p
 On startup, the shared skills repo set in config.json (written by install.ps1)
 is fetched; when behind its upstream, it is fast-forward pulled and its
 install.ps1, if any, is run so skills and the global CLAUDE.md are up to date
-before Claude Code starts. Without a configured repo, this step is skipped.
+before Claude Code starts. When the repo has an upstream remote (its base
+repo), it is fetched too and pending base commits are reported, not merged.
+Without a configured repo, this step is skipped.
 
 The Claude account is then picked (see accounts.py): Up/Down to highlight,
 Enter to use it (logging in when needed), Right to open its options (use or
@@ -61,6 +63,9 @@ from terminal_ui import (
 CONFIG_FILE = Path(__file__).resolve().parent / "config.json"
 GIT_TIMEOUT_SECONDS = 10
 INSTALL_WARNINGS_MARKER = "__INSTALL_WARNINGS__"
+# INFO: Default branch of the upstream remote (the base repo of the skills repo), whatever its name.
+# Only reported, never merged: its history is unrelated, so merging it always creates a commit left to the user.
+BASE_BRANCH = "upstream/HEAD"
 
 FOLDER_HELP_TEXT = "  Up/Down: Highlight   Left/Right: Navigate   Enter: Select   Esc: Back   Ctrl+C: Quit"
 DEFAULT_FOLDER_HELP_TEXT = "  Up/Down: Highlight   Left/Right: Navigate   Enter: Set as default   Esc: Back   Ctrl+C: Quit"
@@ -165,6 +170,43 @@ def update_skills_repo(repo):
         return f"updated ({commits}), install.ps1 reported warnings", YELLOW
 
     return f"updated ({commits})", GREEN
+
+
+def count_base_updates(repo):
+    if run_command(["git", "remote", "get-url", "upstream"], repo).returncode != 0:
+        return 0
+
+    if run_command(["git", "fetch", "upstream", "--quiet"], repo, GIT_TIMEOUT_SECONDS).returncode != 0:
+        return None
+
+    # INFO: upstream/HEAD only exists once resolved, set-head asks the remote for its default branch
+    if run_command(["git", "rev-parse", "--verify", "--quiet", BASE_BRANCH], repo).returncode != 0:
+        if run_command(["git", "remote", "set-head", "upstream", "--auto"], repo, GIT_TIMEOUT_SECONDS).returncode != 0:
+            return None
+
+    behind = run_command(["git", "rev-list", "--count", f"HEAD..{BASE_BRANCH}"], repo)
+
+    return int(behind.stdout.strip()) if behind.returncode == 0 else None
+
+
+def get_skills_status(repo):
+    text, color = update_skills_repo(repo)
+
+    if not (repo / ".git").exists():
+        return text, color
+
+    try:
+        base_updates = count_base_updates(repo)
+    except (subprocess.TimeoutExpired, OSError):
+        base_updates = None
+
+    if base_updates is None:
+        return f"{text}, base check failed", YELLOW
+
+    if base_updates == 0:
+        return text, color
+
+    return f"{text}, {base_updates} base update{'s' if base_updates > 1 else ''} to merge", YELLOW
 
 
 def get_subfolder_names(current_dir):
@@ -539,7 +581,7 @@ def pick_launch_target(argument_dir):
 
     if skills_repo is not None:
         render_screen([("Skills", "checking updates…", DARK_GRAY)])
-        skills_status = update_skills_repo(skills_repo)
+        skills_status = get_skills_status(skills_repo)
     account = None
 
     while True:

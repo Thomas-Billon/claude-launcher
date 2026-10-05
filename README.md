@@ -81,10 +81,11 @@ Les réglages passés par `--settings` priment sur ceux des projets et du compte
 
 ## Mise à jour des skills (optionnel)
 
-Si un repo de skills partagés est renseigné dans `config.json` (par exemple [claude-skills](https://github.com/Thomas-Billon/claude-skills)), le launcher le met à jour au démarrage, avant d'afficher le menu, pour que Claude Code démarre avec les derniers skills et le dernier `CLAUDE.md` global :
+Si un repo de skills partagés est renseigné dans `config.json` (par exemple un repo créé à partir de [claude-skills-base](https://github.com/Thomas-Billon/claude-skills-base)), le launcher le met à jour au démarrage, avant d'afficher le menu, pour que Claude Code démarre avec les derniers skills et le dernier `CLAUDE.md` global :
 
 1. `git fetch` du repo
 2. S'il est en retard sur sa branche distante : `git pull --ff-only`, puis son `install.ps1` s'il en a un
+3. S'il a un remote `upstream` (sa base) : `git fetch upstream`, et les commits de sa branche par défaut pas encore mergés sont signalés en jaune. Le merge n'est jamais fait automatiquement, puisqu'il crée un commit : `git merge upstream/HEAD` reste à lancer à la main
 
 Le résultat s'affiche sur la ligne `Skills` des menus. Un échec (hors ligne, pull refusé, repo introuvable) n'empêche pas le lancement. Sans repo configuré, l'étape est ignorée et la ligne `Skills` n'apparaît pas.
 

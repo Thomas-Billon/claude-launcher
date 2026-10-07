@@ -1,14 +1,22 @@
 # claude-launcher
 
-Launcher interactif qui lance Claude Code avec le compte choisi, dans le projet choisi.
+Launcher interactif pour **Claude Code** : choix du **compte**, puis du **projet**, puis lancement de `claude` dans le dossier choisi.
 
-Le launcher fait choisir un compte Claude, liste ensuite les 5 derniers dossiers ouverts avec ce compte, puis les sous-dossiers de son dossier par défaut (les plus récemment lancés en tête), et exécute `claude` dans le dossier sélectionné.
+- 🕘 Les **5 derniers dossiers** ouverts avec le compte en tête de liste
+- 📁 Puis les **sous-dossiers** du dossier par défaut, les plus récemment lancés en premier
+- 🔄 **Synchro git** du launcher et du repo de skills partagés au démarrage
+
+> [!WARNING]
+> **Code généré par IA** : ce repo a été écrit avec Claude Code. Il est fourni **tel quel, sans aucune garantie** : relire les scripts avant de les lancer, leur utilisation se fait **à vos risques et périls**.
 
 ## Prérequis
 
-- Windows (le launcher lit le clavier via `msvcrt`)
-- Python 3 dans le `PATH`
-- Claude Code CLI (`claude`) dans le `PATH`
+| Outil | Remarque |
+|-------|----------|
+| **Windows** | Lecture du clavier via `msvcrt` |
+| **Python 3** | Dans le `PATH` |
+| **Claude Code CLI** | `claude` dans le `PATH` |
+| **git** | Identité et identifiants configurés par l'utilisateur, jamais par le launcher |
 
 ## Installation
 
@@ -16,12 +24,42 @@ Le launcher fait choisir un compte Claude, liste ensuite les 5 derniers dossiers
 ./install.ps1
 ```
 
-Le script :
+1. Crée le raccourci **« Claude Code »** dans le menu Démarrer
+2. Si `config.json` existe : affiche le repo de skills actuel et propose de le garder (fin du script)
+3. Sinon, choix du **repo de skills partagés** (enregistré dans `config.json`) :
+   - **Repo local existant** : saisie du chemin
+   - **Nouveau repo** depuis le template [claude-skills-base](https://github.com/Thomas-Billon/claude-skills-base) : « Use this template » dans le navigateur, collage de l'URL, puis `git clone` en local
+   - **Aucun**
+4. Avec un repo : mise en place du [`CLAUDE.md` global](#claudemd-global)
+5. Propose de lancer l'`install.ps1` du repo de skills (jonctions, relais `~/.claude/CLAUDE.md`, remote `upstream`)
 
-1. crée le raccourci « Claude Code » dans le menu Démarrer ;
-2. demande si un repo de skills partagés doit être utilisé (`Y/N`), puis son chemin local (voir [Mise à jour des skills](#mise-à-jour-des-skills-optionnel)). Le choix est enregistré dans `config.json`. Si ce fichier existe déjà, le script affiche le réglage actuel et propose de le garder.
+> [!NOTE]
+> - Toute action git est **affichée puis confirmée** (`Y/N`). Aucun accès GitHub requis, seulement git.
+> - Repo déplacé ou nouvelle machine : **relancer le script** (chemins du raccourci déduits de l'emplacement du repo).
+> - Le raccourci peut ensuite être **épinglé à la barre des tâches**.
 
-Les chemins du raccourci sont déduits de l'emplacement du repo : relancer le script après un déplacement du repo ou sur une nouvelle machine. Le raccourci peut ensuite être épinglé à la barre des tâches.
+### `CLAUDE.md` global
+
+Avec un repo de skills, `~/.claude/CLAUDE.md` devient un **relais** qui importe le `CLAUDE.md` du repo. Un fichier vide compte comme absent.
+
+| `~/.claude/CLAUDE.md` | `CLAUDE.md` du repo | Action |
+|---|---|---|
+| Absent | — | Aucune : l'`install.ps1` des skills crée le fichier du repo (vide) et le relais |
+| Relais vers ce repo | — | Aucune |
+| Relais vers un autre fichier | Présent, ou référencé vide | Propose de repointer le relais vers ce repo |
+| Relais vers un autre fichier | Absent | Propose d'importer le fichier référencé (comme ci-dessous) |
+| Présent | Absent | Propose d'importer son contenu dans le repo, puis de le remplacer par le relais (commit proposé au lancement suivant) |
+| Présent | Présent | **Fusion manuelle** : reporter les règles, supprimer le fichier, relancer l'`install.ps1` des skills |
+
+## Désinstallation
+
+```powershell
+./uninstall.ps1
+```
+
+- 🗑️ Supprime le raccourci et `config.json` (après confirmation)
+- 👤 Pour chaque compte (`Y/N`) : `claude auth logout` puis suppression du dossier (jonctions retirées d'abord)
+- 🛡️ **Jamais touchés** : `~/.claude` et les repos clonés
 
 ## Utilisation
 
@@ -36,60 +74,120 @@ python claude_launcher.py -d <dossier>     # dossier racine ponctuel, prioritair
 
 | Touche | Action |
 |--------|--------|
-| ↑ / ↓ | Sélectionner un compte |
-| Entrée | Utiliser le compte (connexion dans le navigateur s'il est déconnecté) ; sur `+ Add account`, ajouter un compte |
-| → | Ouvrir les options du compte : `Use account` / `Set default folder` / `Remove from history` / `Clear history` / `Delete account` |
-| ← / Échap | Fermer les options (ou revenir aux options depuis l'historique) |
-| Échap | Quitter (depuis la liste des comptes) |
-| Ctrl+C | Quitter |
+| `↑` `↓` | Sélectionner un compte |
+| `Entrée` | Utiliser le compte (ou ajouter un compte sur `+ Add account`) |
+| `→` | Ouvrir les [options du compte](#options-dun-compte) |
+| `←` `Échap` | Fermer les options |
+| `Échap` | Quitter (depuis la liste) |
+| `Ctrl+C` | Quitter |
 
 ### Choix du dossier
 
-En haut de la liste, séparés par une ligne vide, les 5 derniers dossiers ouverts avec ce compte, sous la forme `nom  (dossier parent)`. Viennent ensuite les sous-dossiers du dossier courant.
+Liste : les **5 dossiers récents** (`nom  (dossier parent)`), une ligne vide, puis les **sous-dossiers** du dossier courant.
 
 | Touche | Action |
 |--------|--------|
-| ↑ / ↓ | Sélectionner un dossier |
-| → | Entrer dans le dossier sélectionné |
-| ← | Remonter au dossier parent |
-| Entrée | Lancer Claude Code dans le dossier sélectionné |
-| Échap | Revenir au choix du compte |
-| Ctrl+C | Quitter |
+| `↑` `↓` | Sélectionner un dossier |
+| `→` | Entrer dans le dossier |
+| `←` | Remonter au dossier parent |
+| `Entrée` | **Lancer Claude Code** |
+| `Échap` | Revenir au choix du compte |
+| `Ctrl+C` | Quitter |
 
 ## Comptes
 
-Chaque compte a son propre dossier de configuration Claude Code, `~/.claude-accounts/<id>/`, transmis à `claude` via la variable `CLAUDE_CONFIG_DIR`. Plusieurs comptes peuvent donc tourner en parallèle, et chacun garde sa connexion : Claude Code rafraîchit lui-même ses jetons, une seule connexion par compte suffit.
+Chaque compte a son dossier `~/.claude-accounts/<id>/`, passé à `claude` via `CLAUDE_CONFIG_DIR`.
 
-- **Sécurité** : le launcher ne lit ni n'enregistre aucun identifiant. Connexion, statut et déconnexion passent par `claude auth login` / `status` / `logout`. Le launcher ne stocke aucune adresse mail : les libellés sont lus dans le profil que Claude Code tient lui-même dans le dossier du compte (`.claude.json`). Pour savoir si le compte est connecté, seule la présence de `.credentials.json` est vérifiée, jamais son contenu. Avant de demander une reconnexion, le statut est confirmé par `claude auth status`. Les dossiers des comptes sont hors du repo.
-- **Liste** : triée par ordre alphabétique.
-- **Ajout** : `+ Add account` crée le dossier puis lance la connexion. Le dossier est supprimé si la connexion échoue ou si le compte est déjà dans la liste.
-- **Dossier par défaut** : `Set default folder` ouvre une sélection de dossier, partant du dossier par défaut actuel du compte ou à défaut du dossier utilisateur. Entrée enregistre le dossier sélectionné (`~/.claude-accounts/launcher_state.json`), Échap annule. La sélection du dossier de lancement part ensuite de ce dossier pour ce compte.
-- **Historique** : la date du dernier lancement de chaque dossier est enregistrée par compte, dans `~/.claude-accounts/launcher_state.json`. Elle sert à lister les dossiers récents et à trier les sous-dossiers. `Remove from history` liste tout l'historique du compte, du plus récent au plus ancien : Entrée retire le dossier sélectionné. `Clear history` vide tout l'historique du compte, après confirmation.
-- **Suppression** : `Delete account` demande confirmation, déconnecte le compte puis supprime son dossier, son dossier par défaut et son historique (ses jonctions sont retirées d'abord, `~/.claude` n'est jamais touché).
+- ⚡ Plusieurs comptes peuvent tourner **en parallèle**
+- 🔑 **Une seule connexion** par compte : Claude Code rafraîchit lui-même ses jetons
+
+> [!IMPORTANT]
+> **Sécurité** : le launcher ne lit ni n'enregistre **aucun identifiant ni adresse mail**.
+> - Connexion et déconnexion faites par Claude Code (`claude auth logout`)
+> - Adresse affichée lue dans le profil tenu par Claude Code (`.claude.json`)
+> - Statut connecté : seule la **présence** de `.credentials.json` est vérifiée, jamais son contenu
+> - Dossiers des comptes **hors du repo**
+
+### Options d'un compte
+
+Nom et adresse mail (en gris) affichés pour chaque compte, triés par ordre alphabétique. Données dans `~/.claude-accounts/launcher_state.json`.
+
+| Option | Effet |
+|--------|-------|
+| `+ Add account` | Demande un nom (`Perso`, `Work`…) et crée le dossier. Connexion au premier lancement |
+| `Use account` | Passe au choix du dossier |
+| `Rename account` | Modifie le nom |
+| `Set default folder` | Choisit le dossier de départ du compte (`Entrée` enregistre, `Échap` annule) |
+| `Remove from history` | Liste l'historique, du plus récent au plus ancien : `Entrée` retire le dossier |
+| `Clear history` | Vide l'historique du compte (après confirmation) |
+| `Delete account` | Déconnecte, retire les jonctions et supprime dossier, réglages et historique (après confirmation) |
+
+- 🕘 **Historique** : date du dernier lancement de chaque dossier, par compte. Sert aux dossiers récents et au tri.
+- ⚠️ **Doublon** : avertissement à la fermeture si un autre compte utilise la même adresse.
+- 🏷️ Un compte sans nom (antérieur aux noms) affiche son adresse.
 
 ### Configuration partagée
 
-`~/.claude` reste la base commune (alimentée par exemple par le repo de skills partagés). Aucun compte ne s'y connecte. Le dossier de chaque compte y fait référence :
+`~/.claude` reste la **base commune** (alimentée par le repo de skills). Aucun compte ne s'y connecte.
 
 | Élément | Partage |
 |---------|---------|
 | `skills/`, `plugins/` | Jonctions vers `~/.claude` |
-| `CLAUDE.md` | Une seule ligne `@~/.claude/CLAUDE.md`, qui importe le `CLAUDE.md` global |
-| `settings.json` | Passé à chaque lancement via `claude --settings ~/.claude/settings.json` |
+| `CLAUDE.md` | Une ligne `@~/.claude/CLAUDE.md` |
+| `settings.json` | `claude --settings ~/.claude/settings.json` à chaque lancement |
 
-Les réglages passés par `--settings` priment sur ceux des projets et du compte : pour qu'un réglage s'applique à tous les comptes, le modifier dans `~/.claude/settings.json`.
+> [!TIP]
+> `--settings` prime sur les réglages des projets et du compte : un réglage pour **tous les comptes** se met dans `~/.claude/settings.json`.
 
-## Mise à jour des skills (optionnel)
+## Mises à jour au démarrage
 
-Si un repo de skills partagés est renseigné dans `config.json` (par exemple un repo créé à partir de [claude-skills-base](https://github.com/Thomas-Billon/claude-skills-base)), le launcher le met à jour au démarrage, avant d'afficher le menu, pour que Claude Code démarre avec les derniers skills et le dernier `CLAUDE.md` global :
+Avant le menu, synchro du **repo du launcher** puis du **repo de skills** (une ligne chacun dans l'en-tête : `Launcher`, `Skills`). Après un `git fetch` silencieux, chaque action est **proposée** :
 
-1. `git fetch` du repo
-2. S'il est en retard sur sa branche distante : `git pull --ff-only`, puis son `install.ps1` s'il en a un
-3. S'il a un remote `upstream` (sa base) : `git fetch upstream`, et les commits de sa branche par défaut pas encore mergés sont signalés en jaune. Le merge n'est jamais fait automatiquement, puisqu'il crée un commit : `git merge upstream/HEAD` reste à lancer à la main
+| # | Situation | Question | Commande |
+|---|-----------|----------|----------|
+| 1 | Changements non commités | `N changed files, commit & push?` | `git add --all` + commit (message modifiable) |
+| 2 | Nouveaux commits distants | `N new commits, pull?` | `git pull --rebase=merges --autostash` |
+| 3 | Commits locaux non poussés | `N local commits not pushed, push?` | `git push` |
 
-Le résultat s'affiche sur la ligne `Skills` des menus. Un échec (hors ligne, pull refusé, repo introuvable) n'empêche pas le lancement. Sans repo configuré, l'étape est ignorée et la ligne `Skills` n'apparaît pas.
+- Étape **3** : sautée si des commits distants restent à récupérer ; question omise si un push a déjà été confirmé
+- Conflit au pull : rebase **annulé**, synchro à faire à la main
+- Échec (hors ligne, push refusé, conflit) : affiché **en jaune**, ne bloque **jamais** le lancement
 
-Pour activer, changer ou désactiver le repo : relancer `./install.ps1`.
+**Saisie** : `Y/N` puis `Entrée` (question reposée sinon). Message de commit : `←` `→` `Début` `Fin` `Retour arrière` `Suppr`, `Entrée` valide, `Échap` renonce.
+
+### Launcher
+
+- **Pull uniquement** (étape 2) : les changements locaux du launcher se gèrent à la main
+- Commits récupérés → **relance automatique** sur la nouvelle version
+- Pas un repo git → étape ignorée, pas de ligne `Launcher`
+
+### Skills (optionnel)
+
+Configuré dans `config.json` (ex : repo issu de [claude-skills-base](https://github.com/Thomas-Billon/claude-skills-base)). Toutes les étapes, plus :
+
+- 🔀 **Remote `upstream`** (la base) fetché aussi : `N new commits on your repo, M on the base repo, pull?`
+- 🔀 Après le pull, **merge de la base** proposé : `M base commits to merge, merge, commit & push?` (message par défaut `Merged base repo updates`, conflit → merge annulé)
+- ⚙️ Après un pull ou un merge : lancement de son `install.ps1` s'il existe
+
+Sans repo : étape ignorée. Pour activer, changer ou désactiver : relancer `./install.ps1`.
+
+## Code
+
+| Fichier | Rôle |
+|---------|------|
+| `claude_launcher.py` | **Point d'entrée** : arguments, enchaînement des étapes, relance après mise à jour |
+| `install.ps1` | Raccourci, repo de skills, `CLAUDE.md` global |
+| `uninstall.ps1` | Suppression du raccourci, de la config et des comptes |
+| `launcher/paths.py` | Chemins utilisés (repo, `config.json`, `~/.claude-accounts`, `~/.claude`) |
+| `launcher/repo_sync.py` | Synchro des repos au démarrage |
+| `launcher/git_repo.py` | Commandes git (fetch, pull, merge, commit, push) |
+| `launcher/accounts.py` | Comptes : dossiers, jonctions, commande de lancement |
+| `launcher/launcher_state.py` | `launcher_state.json` : nom, dossier par défaut, historique |
+| `launcher/account_menu.py` | Menu des comptes, options et historique |
+| `launcher/folder_menu.py` | Choix du dossier |
+| `launcher/prompts.py` | Questions `Y/N`, messages de commit, noms de compte |
+| `launcher/keyboard.py` | Lecture du clavier |
+| `launcher/terminal_ui.py` | Rendu console : en-tête, listes, messages |
 
 ## Fichiers locaux
 
@@ -98,4 +196,4 @@ Non versionnés (`.gitignore`), propres à chaque machine :
 | Fichier | Rôle |
 |---------|------|
 | `*.lnk` | Raccourcis générés par `install.ps1` |
-| `config.json` | Chemin local du repo de skills partagés (`skills_repo`, `null` si désactivé), écrit par `install.ps1` |
+| `config.json` | Chemin du repo de skills (`skills_repo`, `null` si désactivé) |

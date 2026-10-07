@@ -1,21 +1,15 @@
 """
-Console rendering and keyboard helpers shared by the launcher menus.
+Console rendering shared by the launcher screens: a header (title, then one line
+per step already done), a body (usually a list), a message and a help line.
 """
 
-import msvcrt
 import os
 import re
 import shutil
 import sys
+from collections import namedtuple
 
-KEY_UP = b"H"
-KEY_DOWN = b"P"
-KEY_LEFT = b"K"
-KEY_RIGHT = b"M"
-KEY_ENTER = b"\r"
-KEY_ESC = b"\x1b"
-KEY_CTRL_C = b"\x03"
-ARROW_PREFIX = b"\xe0"
+from launcher.keyboard import MenuKey
 
 RESET = "\033[0m"
 CYAN = "\033[96m"
@@ -38,6 +32,12 @@ MIN_LIST_ROWS = 3
 COLUMN_SEPARATOR = " │ "
 # INFO: List item rendered as an empty row and skipped by Up/Down, to split a list into groups
 SEPARATOR = object()
+# INFO: Menu outcomes besides a selection: Esc goes back one step, Ctrl+C quits from anywhere
+BACK = object()
+QUIT = object()
+
+HeaderLine = namedtuple("HeaderLine", "label value color")
+Message = namedtuple("Message", "text color")
 
 
 def colorize(text, color):
@@ -66,15 +66,6 @@ def get_screen_size():
     return width - 1, height
 
 
-def read_key():
-    first_byte = msvcrt.getch()
-
-    if first_byte == ARROW_PREFIX:
-        return msvcrt.getch()
-
-    return first_byte
-
-
 def clear_screen():
     os.system("cls")
 
@@ -89,21 +80,27 @@ def show_cursor():
     sys.stdout.flush()
 
 
+def move_cursor(row, column):
+    # INFO: Rows and columns start at 1
+    sys.stdout.write(f"\033[{row};{column}H")
+    sys.stdout.flush()
+
+
 def draw(lines):
     # INFO: The frame overwrites the previous one in place instead of clearing the screen first, which avoids flicker
     sys.stdout.write(CURSOR_HOME + "\n".join(line + CLEAR_LINE_END for line in lines) + CLEAR_SCREEN_END)
     sys.stdout.flush()
 
 
-def build_header(max_length, details):
+def build_header(max_length, header_lines):
     lines = [
         "",
         colorize(truncate("  Claude Code Launcher", max_length), CYAN),
         colorize(truncate(f"  {'=' * 40}", max_length), DARK_CYAN),
     ]
 
-    for label, value, color in details:
-        lines.append(colorize(truncate(f"  {label:<9} : {value}", max_length), color))
+    for line in header_lines:
+        lines.append(colorize(truncate(f"  {line.label:<9} : {line.value}", max_length), line.color))
 
     lines.append("")
 
@@ -114,11 +111,24 @@ def build_footer(max_length, help_text, message=None):
     message_line = ""
 
     if message is not None:
-        message_text, message_color = message
-        message_line = colorize(truncate(f"  {message_text}", max_length), message_color)
+        message_line = colorize(truncate(f"  {message.text}", max_length), message.color)
 
     # INFO: The message row is always reserved so the help line never moves when a message appears or disappears
     return ["", message_line, "", colorize(truncate(help_text, max_length), DARK_GRAY)]
+
+
+def render_screen(header_lines, render_body=None, help_text=None, message=None):
+    max_length, height = get_screen_size()
+    header = build_header(max_length, header_lines)
+    body = []
+    footer = []
+
+    if render_body is not None:
+        footer = build_footer(max_length, help_text, message)
+        available_rows = max(height - len(header) - len(footer), MIN_LIST_ROWS)
+        body = render_body(available_rows, max_length)
+
+    draw(header + body + footer)
 
 
 def join_columns(left_lines, right_lines, left_width):
@@ -144,9 +154,11 @@ def get_scroll_offset(scroll_offset, selected_index, visible_rows, item_count):
 class ListSelection:
     """Highlighted item of a vertical list, moved with Up/Down and rendered with scrolling."""
 
-    def __init__(self, items, label=str, selected_index=0):
+    def __init__(self, items, label=str, selected_index=0, secondary_label=None):
         self.items = items
         self.label = label
+        # INFO: Optional text shown in gray after the label of each item
+        self.secondary_label = secondary_label
         self.selectable_indexes = [index for index, item in enumerate(items) if item is not SEPARATOR]
         self.selected_index = selected_index if selected_index in self.selectable_indexes else self._first_selectable()
         self.scroll_offset = 0
@@ -159,10 +171,10 @@ class ListSelection:
         return self.items[self.selected_index] if self.selectable_indexes else None
 
     def handle_key(self, key):
-        if not self.selectable_indexes or key not in (KEY_UP, KEY_DOWN):
+        if not self.selectable_indexes or key not in (MenuKey.UP, MenuKey.DOWN):
             return False
 
-        step = -1 if key == KEY_UP else 1
+        step = -1 if key == MenuKey.UP else 1
         position = self.selectable_indexes.index(self.selected_index)
         self.selected_index = self.selectable_indexes[(position + step) % len(self.selectable_indexes)]
 
@@ -189,16 +201,31 @@ class ListSelection:
 
                 continue
 
-            name = truncate(self.label(self.items[index]), max_length - 4)
-
-            if index != self.selected_index:
-                lines.append(colorize(f"    {name}", WHITE))
-            elif has_cursor:
-                lines.append(colorize("  > ", GREEN) + colorize(name, BLACK_ON_GREEN))
-            else:
-                lines.append("    " + colorize(name, BLACK_ON_GREEN))
+            lines.append(self.render_item(index, max_length, has_cursor))
 
         if is_scrollable:
             lines.append(colorize(f"  ↓ {hidden_below} more", DARK_GRAY) if hidden_below > 0 else "")
 
         return lines
+
+    def render_item(self, index, max_length, has_cursor):
+        item = self.items[index]
+        name = truncate(self.label(item), max_length - 4)
+        suffix = self.render_secondary_label(item, max_length - 4 - len(name))
+
+        if index != self.selected_index:
+            return colorize(f"    {name}", WHITE) + suffix
+
+        if has_cursor:
+            return colorize("  > ", GREEN) + colorize(name, BLACK_ON_GREEN) + suffix
+
+        return "    " + colorize(name, BLACK_ON_GREEN) + suffix
+
+    def render_secondary_label(self, item, max_length):
+        text = self.secondary_label(item) if self.secondary_label is not None else None
+
+        # INFO: Below a few columns, a truncated text would only show an ellipsis
+        if not text or max_length < 6:
+            return ""
+
+        return colorize(truncate(f"  {text}", max_length), DARK_GRAY)

@@ -9,7 +9,7 @@ import shutil
 import sys
 from collections import namedtuple
 
-from launcher.keyboard import MenuKey
+from launcher.keyboard import Key
 
 RESET = "\033[0m"
 CYAN = "\033[96m"
@@ -77,6 +77,11 @@ def hide_cursor():
 
 def show_cursor():
     sys.stdout.write(SHOW_CURSOR)
+    sys.stdout.flush()
+
+
+def set_title(title):
+    sys.stdout.write(f"\033]0;{title}\007")
     sys.stdout.flush()
 
 
@@ -171,10 +176,10 @@ class ListSelection:
         return self.items[self.selected_index] if self.selectable_indexes else None
 
     def handle_key(self, key):
-        if not self.selectable_indexes or key not in (MenuKey.UP, MenuKey.DOWN):
+        if not self.selectable_indexes or key not in (Key.UP, Key.DOWN):
             return False
 
-        step = -1 if key == MenuKey.UP else 1
+        step = -1 if key == Key.UP else 1
         position = self.selectable_indexes.index(self.selected_index)
         self.selected_index = self.selectable_indexes[(position + step) % len(self.selectable_indexes)]
 

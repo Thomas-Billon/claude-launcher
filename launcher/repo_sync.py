@@ -4,7 +4,7 @@ skills repo set in config.json (written by install.ps1), each with its header li
 
 Each repo is fetched, then every action is asked first (Y/N). The launcher repo
 is only pulled, the skills repo is fully synced:
-1. uncommitted changes are committed (message editable), then pushed;
+1. uncommitted changes are listed, committed (message editable), then pushed;
 2. new remote commits are pulled;
 3. commits of its base repo (upstream remote) are merged, committed (message
    editable) and pushed;
@@ -95,8 +95,8 @@ class RepoSync:
     def show_progress(self, text):
         render_screen([*self.previous_lines, HeaderLine(self.label, text, DARK_GRAY)])
 
-    def ask(self, status, question):
-        return ask_yes_no([*self.previous_lines, HeaderLine(self.label, status, YELLOW)], question)
+    def ask(self, status, question, details=()):
+        return ask_yes_no([*self.previous_lines, HeaderLine(self.label, status, YELLOW)], question, details)
 
     def ask_message(self, status, default_message):
         return ask_commit_message([*self.previous_lines, HeaderLine(self.label, status, YELLOW)], default_message)
@@ -165,13 +165,13 @@ class RepoSync:
         return base_behind
 
     def commit_changes(self, commit_message):
-        changed_count = git_repo.count_changed_files(self.repo)
+        changed_files = git_repo.list_changed_files(self.repo)
 
-        if not changed_count:
+        if not changed_files:
             return
 
-        status = pluralize(changed_count, "changed file")
-        message = self.ask(status, "Commit & push?") and self.ask_message(status, commit_message)
+        status = pluralize(len(changed_files), "changed file")
+        message = self.ask(status, "Commit & push?", changed_files) and self.ask_message(status, commit_message)
 
         if not message:
             self.report(f"{status} not committed", is_warning=True)

@@ -40,11 +40,13 @@ class Account:
     name: str | None = None
 
     @property
-    def label(self):
+    def display_name(self):
         # INFO: Accounts added before names existed fall back to their email
-        name = self.name or self.email or f"Unknown account {self.account_id}"
+        return self.name or self.email or f"Unknown account {self.account_id}"
 
-        return name if self.logged_in else f"{name} (logged out)"
+    @property
+    def label(self):
+        return self.display_name if self.logged_in else f"{self.display_name} (logged out)"
 
     @property
     def secondary_label(self):
@@ -63,13 +65,13 @@ def build_environment(account):
     return {**os.environ, "CLAUDE_CONFIG_DIR": str(account.config_dir)}
 
 
-def build_launch_command():
+def build_launch_command(claude_arguments=()):
     command = [find_claude_executable()]
 
     if SHARED_SETTINGS_FILE.is_file():
         command.extend(["--settings", str(SHARED_SETTINGS_FILE)])
 
-    return command
+    return command + list(claude_arguments)
 
 
 def read_account(config_dir, name=None):
@@ -93,6 +95,17 @@ def load_accounts():
     accounts = [read_account(entry, names.get(entry.name)) for entry in ACCOUNTS_DIR.iterdir() if entry.is_dir()]
 
     return sorted(accounts, key=lambda account: account.label.casefold())
+
+
+def find_accounts(query):
+    """Returns the accounts whose name, email or id is the query, ignoring case."""
+    query = query.casefold()
+
+    return [
+        account
+        for account in load_accounts()
+        if query in (value.casefold() for value in (account.name, account.email, account.account_id) if value)
+    ]
 
 
 def find_duplicate(account):

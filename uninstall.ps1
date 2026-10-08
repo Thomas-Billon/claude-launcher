@@ -1,10 +1,12 @@
-﻿# INFO: Removes what install.ps1 and the launcher created on this machine: the Start menu shortcut, config.json,
+﻿# INFO: Removes what install.ps1 and the launcher created on this machine: the Start menu shortcut, the Windows
+# Terminal profile, config.json,
 # then each account on confirmation (logged out, then its directory deleted).
 # ~/.claude and the cloned repos (this one, the shared skills repo) are never touched.
 
 $configPath = Join-Path $PSScriptRoot 'config.json'
 $accountsDirectory = Join-Path $env:USERPROFILE '.claude-accounts'
 $statePath = Join-Path $accountsDirectory 'launcher_state.json'
+$terminalFragmentDirectory = Join-Path $env:LOCALAPPDATA 'Microsoft\Windows Terminal\Fragments\claude-launcher'
 
 function Read-YesNo($question) {
     while ($true) {
@@ -26,6 +28,13 @@ function Remove-Shortcut {
     if (Test-Path $shortcutPath) {
         Remove-Item -LiteralPath $shortcutPath
         Write-Host "Removed: $shortcutPath"
+    }
+}
+
+function Remove-TerminalProfile {
+    if (Test-Path $terminalFragmentDirectory) {
+        Remove-Item -LiteralPath $terminalFragmentDirectory -Recurse
+        Write-Host "Removed: $terminalFragmentDirectory"
     }
 }
 
@@ -126,10 +135,11 @@ function Remove-Accounts {
     }
 }
 
-if (-not (Read-YesNo 'Uninstall the launcher (Start menu shortcut, config.json, then accounts on confirmation)?')) {
+if (-not (Read-YesNo 'Uninstall the launcher (Start menu shortcut, Windows Terminal profile, config.json, then accounts on confirmation)?')) {
     return
 }
 
 Remove-Shortcut
+Remove-TerminalProfile
 Remove-Config
 Remove-Accounts

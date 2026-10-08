@@ -7,10 +7,12 @@ Steps, each one adding its line to the header (modules in the launcher folder):
    restarts itself to run them.
 2. Account (account_menu.py). Claude Code asks for the login of a logged out
    account itself, after which an account already in the list is reported.
-3. Folder (folder_menu.py) where `claude` is launched.
+3. Folder (folder_menu.py) where `claude` is launched, and session mode.
 
-The folder list starts from the -d argument, else from the default folder of
-the account (launcher_state.py), else from the user's home directory.
+The -a argument skips the account menu, and the folder menu too along with -d.
+Otherwise the folder list starts from the -d argument, else from the default
+folder of the account (launcher_state.py), else from the user's home directory.
+Arguments after -- are passed to Claude Code.
 """
 
 import argparse
@@ -23,7 +25,7 @@ from pathlib import Path
 
 from launcher import accounts, launcher_state, repo_sync
 from launcher.account_menu import prompt_for_account
-from launcher.folder_menu import get_start_dir, prompt_for_folder
+from launcher.folder_menu import NEW_SESSION, get_start_dir, prompt_for_launch_folder, session_header_line
 from launcher.terminal_ui import (
     BACK,
     CYAN,
@@ -36,6 +38,7 @@ from launcher.terminal_ui import (
     colorize,
     hide_cursor,
     render_screen,
+    set_title,
     show_cursor,
 )
 
@@ -46,26 +49,66 @@ RESTART_HEADER_VARIABLE = "CLAUDE_LAUNCHER_RESTART_HEADER"
 SyncResult = namedtuple("SyncResult", "header_lines needs_restart")
 
 
+def split_claude_arguments(command_line):
+    """Splits the command line at the first --, returns the launcher arguments and the Claude Code arguments."""
+    if "--" not in command_line:
+        return command_line, []
+
+    separator_index = command_line.index("--")
+
+    return command_line[:separator_index], command_line[separator_index + 1 :]
+
+
 def parse_arguments():
-    parser = argparse.ArgumentParser(description="Pick a Claude account and a project folder, then launch Claude Code.")
+    launcher_arguments, claude_arguments = split_claude_arguments(sys.argv[1:])
+    parser = argparse.ArgumentParser(
+        description="Pick a Claude account and a project folder, then launch Claude Code.",
+        epilog="Arguments after -- are passed to Claude Code, e.g. -- --model opus",
+    )
+    parser.add_argument(
+        "-a",
+        "--account",
+        help="Account to launch with, by name, email or id: skips the account menu, and the folder menu too with -d",
+    )
     parser.add_argument(
         "-d",
         "--directory",
-        help="Directory to scan for project folders (default: the account default folder, then the home directory)",
+        help="Folder to launch Claude Code in with -a, else directory to start the folder menu from"
+        " (default: the account default folder, then the home directory)",
     )
+    arguments = parser.parse_args(launcher_arguments)
+    arguments.claude_arguments = claude_arguments
 
-    return parser.parse_args()
+    return arguments
 
 
 def check_prerequisites(argument_dir):
     """Returns the error to show, or None when the launcher can run."""
     if argument_dir is not None and not argument_dir.is_dir():
-        return f'No folders found in "{argument_dir}".'
+        return f'Directory not found: "{argument_dir}".'
 
     if accounts.find_claude_executable() is None:
         return "Claude Code CLI (claude) not found in PATH."
 
     return None
+
+
+def find_argument_account(account_query):
+    """Returns the account matching the -a argument (None without it), and the error to show when none matches."""
+    if account_query is None:
+        return None, None
+
+    matches = accounts.find_accounts(account_query)
+
+    if len(matches) == 1:
+        return matches[0], None
+
+    if matches:
+        return None, f'Several accounts match "{account_query}", use the account name or id.'
+
+    names = ", ".join(account.display_name for account in accounts.load_accounts()) or "none yet"
+
+    return None, f'No account matches "{account_query}". Accounts: {names}.'
 
 
 def sync_repos():
@@ -94,30 +137,51 @@ def restart(header_lines):
     return subprocess.run([sys.executable, *sys.argv], env=environment).returncode
 
 
-def pick_launch_target(argument_dir, header_lines):
-    """Runs the menus, each one adding its line to the header, and returns the chosen account and folder."""
-    account = None
+def run_menus(argument_dir, argument_account, header_lines):
+    """Runs the menus, each one adding its line to the header. Returns the chosen account, folder and session mode,
+    or None values on Ctrl+C."""
+    account = argument_account
+    # INFO: -a only skips the account menu once, Esc in the folder menu still goes back to it
+    is_account_chosen = account is not None
 
     while True:
-        # INFO: Coming back from the folder list keeps the account that was just chosen highlighted
-        account = prompt_for_account(header_lines, account.account_id if account else None)
+        if not is_account_chosen:
+            # INFO: Coming back from the folder list keeps the account that was just chosen highlighted
+            account = prompt_for_account(header_lines, account.account_id if account else None)
 
-        if account is QUIT:
-            return None, None
+            if account is QUIT:
+                return None, None, None
 
+        is_account_chosen = False
         start_dir = argument_dir or get_start_dir(account)
-        selected_path = prompt_for_folder(start_dir, header_lines, account, show_recent=True)
+        selected_path, session = prompt_for_launch_folder(start_dir, header_lines, account)
 
         if selected_path is QUIT:
-            return None, None
+            return None, None, None
 
         if selected_path is not BACK:
-            break
+            return account, selected_path, session
 
-    launcher_state.record_launch(account, selected_path)
-    render_screen([*header_lines, accounts.account_header_line(account), HeaderLine("Directory", selected_path, GREEN)])
 
-    return account, selected_path
+def pick_launch_target(argument_dir, argument_account, header_lines):
+    """Returns the account, folder and session mode to launch, chosen without any menu with both -a and -d."""
+    if argument_account is not None and argument_dir is not None:
+        account, folder, session = argument_account, argument_dir, NEW_SESSION
+    else:
+        account, folder, session = run_menus(argument_dir, argument_account, header_lines)
+
+        if account is None:
+            return None, None, None
+
+    launcher_state.record_launch(account, folder)
+    lines = [*header_lines, accounts.account_header_line(account), HeaderLine("Directory", folder, GREEN)]
+
+    if session is not NEW_SESSION:
+        lines.append(session_header_line(session, GREEN))
+
+    render_screen(lines)
+
+    return account, folder, session
 
 
 def cancel():
@@ -127,7 +191,7 @@ def cancel():
     return 0
 
 
-def launch_claude_code(account, folder):
+def launch_claude_code(account, folder, claude_arguments):
     """Returns the exit code of Claude Code."""
     failed_links = accounts.prepare_account_dir(account.config_dir)
 
@@ -137,9 +201,11 @@ def launch_claude_code(account, folder):
     print(colorize("  Opening Claude Code…", CYAN))
     print()
 
+    # INFO: A drive root has no name
+    set_title(f"Claude Code · {account.display_name} · {folder.name or folder}")
     os.chdir(folder)
 
-    return subprocess.run(accounts.build_launch_command(), env=accounts.build_environment(account)).returncode
+    return subprocess.run(accounts.build_launch_command(claude_arguments), env=accounts.build_environment(account)).returncode
 
 
 def report_duplicate(account):
@@ -160,12 +226,17 @@ def main():
     arguments = parse_arguments()
     argument_dir = Path(arguments.directory).resolve() if arguments.directory else None
     error = check_prerequisites(argument_dir)
+    argument_account = None
+
+    if error is None:
+        argument_account, error = find_argument_account(arguments.account)
 
     if error is not None:
         print(colorize(error, RED))
 
         return 1
 
+    set_title("Claude Code Launcher")
     clear_screen()
     hide_cursor()
 
@@ -175,17 +246,17 @@ def main():
         if sync_result.needs_restart:
             return restart(sync_result.header_lines)
 
-        account, folder = pick_launch_target(argument_dir, sync_result.header_lines)
+        account, folder, session = pick_launch_target(argument_dir, argument_account, sync_result.header_lines)
     except KeyboardInterrupt:
         # INFO: Raised by Ctrl+C in a question of the repo syncs or of the account menu
-        account, folder = None, None
+        account, folder, session = None, None, None
     finally:
         show_cursor()
 
     if account is None:
         return cancel()
 
-    exit_code = launch_claude_code(account, folder)
+    exit_code = launch_claude_code(account, folder, [*session.claude_arguments, *arguments.claude_arguments])
     report_duplicate(account)
 
     return exit_code

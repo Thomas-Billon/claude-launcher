@@ -1,42 +1,72 @@
 """
 Folder menu: picks the folder where Claude Code is launched, or the default folder of an account.
 
-Subfolders of a directory are listed (Up/Down to highlight, Left/Right to move to
-the parent/child folder). The last launch time per folder is remembered per
-account (see launcher_state.py): the most recently opened folders can be listed
-on top, and subfolders are sorted most-recently-used first.
+Subfolders of a directory are listed by name (Up/Down to highlight, Left/Right to
+move to the parent/child folder). Typed characters filter the list by folder name,
+Backspace erases them and Esc clears the filter. A last entry creates a new folder
+in the current directory.
+
+To launch Claude Code, the most recently opened folders of the account (see
+launcher_state.py) are listed on top, and Tab cycles the session mode: a new
+conversation, the last one continued, or one picked in Claude Code to resume.
 """
 
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
 from launcher import launcher_state
 from launcher.accounts import account_header_line
-from launcher.keyboard import MenuKey, read_menu_key
+from launcher.keyboard import Key, is_typed_character, read_key
+from launcher.prompts import ask_folder_name
 from launcher.terminal_ui import (
     BACK,
+    CYAN,
     DARK_GRAY,
+    GREEN,
     MIN_LIST_ROWS,
     QUIT,
     RED,
     SEPARATOR,
     HeaderLine,
     ListSelection,
+    Message,
     colorize,
     render_screen,
     truncate,
 )
 
-FOLDER_HELP_TEXT = "  Up/Down: Highlight   Left/Right: Navigate   Enter: Select   Esc: Back   Ctrl+C: Quit"
-DEFAULT_FOLDER_HELP_TEXT = "  Up/Down: Highlight   Left/Right: Navigate   Enter: Set as default   Esc: Back   Ctrl+C: Quit"
+FOLDER_HELP_TEXT = "  Up/Down: Highlight   Left/Right: Navigate   Type: Filter   Tab: Session   Enter: Launch   Esc: Back   Ctrl+C: Quit"
+DEFAULT_FOLDER_HELP_TEXT = "  Up/Down: Highlight   Left/Right: Navigate   Type: Filter   Enter: Set as default   Esc: Back   Ctrl+C: Quit"
 
-RECENT_FOLDER_COUNT = 5
+ACCESS_DENIED_MESSAGE = Message("Access denied to this folder.", RED)
+INVALID_NAME_CHARACTERS = '<>:"/\\|?*'
 
 
 @dataclass(frozen=True)
 class FolderEntry:
     path: Path
     label: str
+
+
+@dataclass(frozen=True)
+class SessionMode:
+    label: str
+    claude_arguments: tuple
+
+
+NEW_FOLDER = FolderEntry(None, "+ New folder")
+
+SESSION_MODES = (
+    SessionMode("new conversation", ()),
+    SessionMode("continue the last conversation", ("--continue",)),
+    SessionMode("resume a conversation, picked in Claude Code", ("--resume",)),
+)
+NEW_SESSION = SESSION_MODES[0]
+
+
+def session_header_line(session, color):
+    return HeaderLine("Session", session.label, color)
 
 
 def format_folder_label(folder):
@@ -50,87 +80,189 @@ def get_start_dir(account):
     return default_dir if default_dir is not None and default_dir.is_dir() else Path.home()
 
 
-def get_subfolder_names(current_dir):
-    if not current_dir.is_dir():
-        return []
+def get_subfolder_names(directory):
+    """Returns the subfolder names sorted by name, or None when the folder cannot be read."""
+    try:
+        with os.scandir(directory) as entries:
+            names = [entry.name for entry in entries if entry.is_dir()]
+    except OSError:
+        return None
 
-    return [entry.name for entry in current_dir.iterdir() if entry.is_dir()]
-
-
-def sort_folders_by_history(folder_names, history, current_dir):
-    def history_key(name):
-        return str(current_dir / name)
-
-    launched = sorted(
-        (name for name in folder_names if history_key(name) in history),
-        key=lambda name: history[history_key(name)],
-        reverse=True,
-    )
-    never_launched = sorted(name for name in folder_names if history_key(name) not in history)
-
-    return launched + never_launched
+    return sorted(names, key=str.casefold)
 
 
 def get_recent_folders(history):
-    launched = sorted(history, key=history.get, reverse=True)
-
-    return [Path(folder) for folder in launched if Path(folder).is_dir()][:RECENT_FOLDER_COUNT]
+    return [Path(folder) for folder in launcher_state.prune_history(history)]
 
 
-def build_folder_entries(directory, history, show_recent):
-    subfolders = [
-        FolderEntry(directory / name, name)
-        for name in sort_folders_by_history(get_subfolder_names(directory), history, directory)
-    ]
-
-    if not show_recent:
-        return subfolders
-
-    recent = [FolderEntry(folder, format_folder_label(folder)) for folder in get_recent_folders(history)]
-
-    return recent + [SEPARATOR] + subfolders if recent else subfolders
+def is_valid_folder_name(name):
+    # INFO: Windows silently drops a trailing dot, the created folder would not have the typed name
+    return not name.endswith(".") and not any(character in INVALID_NAME_CHARACTERS for character in name)
 
 
-def render_folder_menu(current_dir, selection, has_subfolders, header_lines, account, help_text, message):
-    def render_body(available_rows, max_length):
-        if has_subfolders:
-            return selection.render(available_rows, max_length)
+class FolderMenu:
+    """State of the menu between two keys. Each key handler returns the outcome of the menu, or None to go on."""
 
-        no_subfolders = colorize(truncate("  No subfolders here.", max_length), RED)
+    def __init__(self, initial_dir, header_lines, account, is_launch, help_text, message=None):
+        self.header_lines = header_lines
+        self.account = account
+        self.is_launch = is_launch
+        self.help_text = help_text
+        # INFO: Shown until the menu closes, unlike the notice which only lasts until the next key
+        self.message = message
+        self.notice = None
+        self.recent_folders = get_recent_folders(launcher_state.load_history(account)) if is_launch else []
+        self.session_index = 0
+        self.filter_text = ""
+        self.current_dir = initial_dir
+        self.subfolder_names = []
+        self.selection = None
+        self.has_subfolders = False
 
-        return selection.render(max(available_rows - 1, MIN_LIST_ROWS), max_length) + [no_subfolders]
+        if not self.open(initial_dir):
+            self.rebuild()
 
-    lines = [*header_lines, account_header_line(account), HeaderLine("Directory", current_dir, DARK_GRAY)]
-    render_screen(lines, render_body, help_text, message)
+    @property
+    def session(self):
+        return SESSION_MODES[self.session_index]
 
+    @property
+    def screen_lines(self):
+        directory = f"{self.current_dir}   [filter: {self.filter_text}]" if self.filter_text else self.current_dir
+        lines = [*self.header_lines, account_header_line(self.account), HeaderLine("Directory", directory, DARK_GRAY)]
 
-def prompt_for_folder(initial_dir, header_lines, account, help_text=FOLDER_HELP_TEXT, message=None, show_recent=False):
-    """Returns the selected folder, BACK on Esc or QUIT on Ctrl+C."""
-    history = launcher_state.load_history(account)
+        if self.is_launch:
+            lines.append(session_header_line(self.session, DARK_GRAY if self.session is NEW_SESSION else CYAN))
 
-    def build_folder_selection(directory):
-        return ListSelection(build_folder_entries(directory, history, show_recent), lambda entry: entry.label)
+        return lines
 
-    current_dir = initial_dir
-    selection = build_folder_selection(current_dir)
+    def open(self, directory, selected_path=None):
+        """Lists the subfolders of the directory, returns False when it cannot be read."""
+        subfolder_names = get_subfolder_names(directory)
 
-    while True:
-        has_subfolders = any(entry is not SEPARATOR and entry.path.parent == current_dir for entry in selection.items)
-        render_folder_menu(current_dir, selection, has_subfolders, header_lines, account, help_text, message)
-        key = read_menu_key()
+        if subfolder_names is None:
+            self.notice = ACCESS_DENIED_MESSAGE
 
-        if selection.handle_key(key):
-            continue
+            return False
 
-        if key == MenuKey.LEFT and current_dir.parent != current_dir:
-            current_dir = current_dir.parent
-            selection = build_folder_selection(current_dir)
-        elif key == MenuKey.RIGHT and selection.selected is not None:
-            current_dir = selection.selected.path
-            selection = build_folder_selection(current_dir)
-        elif key == MenuKey.ENTER and selection.selected is not None:
-            return selection.selected.path
-        elif key == MenuKey.ESC:
+        self.current_dir = directory
+        self.subfolder_names = subfolder_names
+        self.filter_text = ""
+        self.rebuild(selected_path)
+
+        return True
+
+    def rebuild(self, selected_path=None):
+        def matches_filter(name):
+            return self.filter_text.casefold() in name.casefold()
+
+        recent = [FolderEntry(folder, format_folder_label(folder)) for folder in self.recent_folders if matches_filter(folder.name)]
+        subfolders = [FolderEntry(self.current_dir / name, name) for name in self.subfolder_names if matches_filter(name)]
+        items = (recent + [SEPARATOR] if recent else []) + subfolders + [NEW_FOLDER]
+        matching_indexes = [
+            index
+            for index, item in enumerate(items)
+            if selected_path is not None and item is not SEPARATOR and item.path == selected_path
+        ]
+
+        self.has_subfolders = bool(subfolders)
+        # INFO: A folder both recent and in the current directory is highlighted among the subfolders, listed last
+        self.selection = ListSelection(items, lambda entry: entry.label, matching_indexes[-1] if matching_indexes else 0)
+
+    def run(self):
+        """Returns the selected folder, BACK on Esc or QUIT on Ctrl+C."""
+        while True:
+            self.render()
+            key = read_key()
+            self.notice = None
+
+            if key == Key.CTRL_C:
+                return QUIT
+
+            if self.selection.handle_key(key):
+                continue
+
+            outcome = self.handle_key(key)
+
+            if outcome is not None:
+                return outcome
+
+    def render(self):
+        def render_body(available_rows, max_length):
+            if self.has_subfolders:
+                return self.selection.render(available_rows, max_length)
+
+            text = f'  No subfolders match "{self.filter_text}".' if self.filter_text else "  No subfolders here."
+            no_subfolders = colorize(truncate(text, max_length), RED)
+
+            return self.selection.render(max(available_rows - 1, MIN_LIST_ROWS), max_length) + [no_subfolders]
+
+        render_screen(self.screen_lines, render_body, self.help_text, self.notice or self.message)
+
+    def handle_key(self, key):
+        selected = self.selection.selected
+
+        if key == Key.LEFT and self.current_dir.parent != self.current_dir:
+            # INFO: The folder just left stays highlighted in its parent
+            self.open(self.current_dir.parent, self.current_dir)
+        elif key == Key.RIGHT and selected is not NEW_FOLDER:
+            self.open(selected.path)
+        elif key == Key.ENTER and selected is NEW_FOLDER:
+            self.create_folder()
+        elif key == Key.ENTER:
+            return selected.path
+        elif key == Key.TAB and self.is_launch:
+            self.session_index = (self.session_index + 1) % len(SESSION_MODES)
+        elif key == Key.BACKSPACE and self.filter_text:
+            self.set_filter(self.filter_text[:-1])
+        elif key == Key.ESC and self.filter_text:
+            self.set_filter("")
+        elif key == Key.ESC:
             return BACK
-        elif key == MenuKey.CTRL_C:
-            return QUIT
+        elif is_typed_character(key):
+            self.set_filter(self.filter_text + key)
+
+        return None
+
+    def set_filter(self, filter_text):
+        self.filter_text = filter_text
+        self.rebuild()
+
+    def create_folder(self):
+        name = ask_folder_name(self.screen_lines, self.filter_text)
+
+        if name is None:
+            return
+
+        if not is_valid_folder_name(name):
+            self.notice = Message(f'"{name}" is not a valid folder name.', RED)
+
+            return
+
+        folder = self.current_dir / name
+
+        try:
+            folder.mkdir()
+        except FileExistsError:
+            self.notice = Message(f'"{name}" already exists.', RED)
+
+            return
+        except OSError:
+            self.notice = Message(f'Could not create "{name}".', RED)
+
+            return
+
+        self.open(self.current_dir, folder)
+        self.notice = Message(f'Folder "{name}" created.', GREEN)
+
+
+def prompt_for_folder(initial_dir, header_lines, account, message=None):
+    """Picks the default folder of an account. Returns the selected folder, BACK on Esc or QUIT on Ctrl+C."""
+    return FolderMenu(initial_dir, header_lines, account, False, DEFAULT_FOLDER_HELP_TEXT, message).run()
+
+
+def prompt_for_launch_folder(initial_dir, header_lines, account):
+    """Returns the selected folder (or BACK on Esc, QUIT on Ctrl+C) and the chosen session mode."""
+    menu = FolderMenu(initial_dir, header_lines, account, True, FOLDER_HELP_TEXT)
+
+    return menu.run(), menu.session

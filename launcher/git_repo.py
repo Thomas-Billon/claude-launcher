@@ -68,10 +68,12 @@ def count_commits(repo, revision_range):
     return int(result.stdout.strip()) if result.returncode == 0 else None
 
 
-def count_changed_files(repo):
-    result = run_git(repo, "status", "--porcelain")
+def list_changed_files(repo):
+    """Returns one line per changed file, its status then its path (e.g. " M skills/SKILL.md")."""
+    # INFO: core.quotePath=false keeps accented paths readable instead of octal escapes
+    result = run_git(repo, "-c", "core.quotePath=false", "status", "--porcelain")
 
-    return len(result.stdout.splitlines()) if result.returncode == 0 else 0
+    return result.stdout.splitlines() if result.returncode == 0 else []
 
 
 def commit_all(repo, message):

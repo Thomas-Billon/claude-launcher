@@ -1,5 +1,7 @@
 ﻿# INFO: Installs the launcher on this machine:
-# 1. the "Claude Code" Start menu shortcut, pointing to the launcher of this repo (run again if the repo is moved);
+# 1. the "Claude Code" Start menu shortcut, pointing to the launcher of this repo (run again if the repo is moved).
+#    With Windows Terminal, the launcher runs in a "Claude Code" profile, added through a fragment, and the shortcut
+#    opens it as a new tab of the window dedicated to the launcher;
 # 2. the shared skills repo: an existing local one, a new one created from the base repo template, or none.
 #    Its path is saved in config.json (not versioned), which the launcher reads to sync it;
 # 3. the global CLAUDE.md, turned into a relay to the CLAUDE.md of the skills repo;
@@ -9,6 +11,10 @@
 $baseRepo = 'Thomas-Billon/claude-skills-base'
 $configPath = Join-Path $PSScriptRoot 'config.json'
 $globalClaudeMdPath = Join-Path $env:USERPROFILE '.claude\CLAUDE.md'
+$terminalProfileName = 'Claude Code'
+# INFO: Named window that gathers the launcher tabs, the other Windows Terminal windows never receive one
+$terminalWindowName = 'claude-launcher'
+$terminalFragmentPath = Join-Path $env:LOCALAPPDATA 'Microsoft\Windows Terminal\Fragments\claude-launcher\claude-launcher.json'
 
 function Read-YesNo($question) {
     while ($true) {
@@ -31,6 +37,23 @@ function Read-TextFile($path) {
     return [IO.File]::ReadAllText($path)
 }
 
+function Test-Prerequisites {
+    $missingCommands = @('python', 'git', 'claude') | Where-Object { -not (Get-Command $_ -ErrorAction SilentlyContinue) }
+
+    foreach ($command in $missingCommands) {
+        Write-Host "$command not found in PATH, the launcher needs it." -ForegroundColor Yellow
+    }
+}
+
+function Find-RegularExecutable($name) {
+    # INFO: App execution aliases, in WindowsApps, are reparse points
+    $executable = Get-Command $name -All -CommandType Application -ErrorAction SilentlyContinue |
+        Where-Object { -not ((Get-Item $_.Source -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) } |
+        Select-Object -First 1
+
+    return $executable.Source
+}
+
 function Install-Shortcut {
     $programsDirectory = [Environment]::GetFolderPath('Programs')
 
@@ -41,16 +64,52 @@ function Install-Shortcut {
     }
 
     $shortcutPath = Join-Path $programsDirectory 'Claude Code.lnk'
-    $launcherPath = Join-Path $PSScriptRoot 'claude_launcher.py'
+    $windowsTerminal = Get-Command wt -ErrorAction SilentlyContinue
+    $pythonw = Find-RegularExecutable 'pythonw'
 
+    # INFO: CreateShortcut loads the existing shortcut, so a hotkey set by the user in its properties is kept
     $shortcut = (New-Object -ComObject WScript.Shell).CreateShortcut($shortcutPath)
-    $shortcut.TargetPath = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
-    $shortcut.Arguments = "-NoExit -Command `"python '$launcherPath'`""
+
+    if ($windowsTerminal -and $pythonw) {
+        # INFO: The taskbar shows a blank icon for a pinned shortcut to wt.exe, an app execution alias: pythonw, a regular
+        # executable without a console window, starts it instead
+        $shortcut.TargetPath = $pythonw
+        $shortcut.Arguments = "-c `"import subprocess; subprocess.Popen(['wt', '-w', '$terminalWindowName', 'new-tab', '-p', '$terminalProfileName'])`""
+    } elseif ($windowsTerminal) {
+        $shortcut.TargetPath = $windowsTerminal.Source
+        $shortcut.Arguments = "-w $terminalWindowName new-tab -p `"$terminalProfileName`""
+    } else {
+        # INFO: Quotes doubled since the path is passed in a single-quoted PowerShell string
+        $launcherPath = (Join-Path $PSScriptRoot 'claude_launcher.py') -replace "'", "''"
+        $shortcut.TargetPath = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+        $shortcut.Arguments = "-NoExit -Command `"python '$launcherPath'`""
+    }
+
     $shortcut.WorkingDirectory = $PSScriptRoot
     $shortcut.IconLocation = "$(Join-Path $PSScriptRoot 'claude_launcher.ico'),0"
     $shortcut.Save()
 
     Write-Host "Shortcut created: $shortcutPath"
+}
+
+function Install-TerminalProfile {
+    if (-not (Get-Command wt -ErrorAction SilentlyContinue)) {
+        Write-Host 'Windows Terminal not found, the launcher opens in a PowerShell window.'
+        return
+    }
+
+    $launcherProfile = [ordered]@{
+        name = $terminalProfileName
+        commandline = "python `"$(Join-Path $PSScriptRoot 'claude_launcher.py')`""
+        icon = Join-Path $PSScriptRoot 'claude_launcher.ico'
+        startingDirectory = '%USERPROFILE%'
+    }
+
+    New-Item -ItemType Directory -Force -Path (Split-Path $terminalFragmentPath) | Out-Null
+    # INFO: WriteAllText writes UTF-8 without BOM, Windows Terminal cannot read the UTF-16 PowerShell writes by default
+    [IO.File]::WriteAllText($terminalFragmentPath, (@{ profiles = @($launcherProfile) } | ConvertTo-Json -Depth 5))
+
+    Write-Host "Windows Terminal profile created: $terminalProfileName (restart Windows Terminal if it is open)"
 }
 
 function Test-KeepCurrentConfig {
@@ -70,9 +129,11 @@ function Test-KeepCurrentConfig {
 
 function Select-ExistingRepo {
     while ($true) {
-        $path = Read-Path 'Local path of the shared skills repo'
+        $path = Read-Path 'Local path of the shared skills repo (leave empty to go back)'
 
-        if ($path -and (Test-Path (Join-Path $path '.git'))) {
+        if (-not $path) { return $null }
+
+        if (Test-Path (Join-Path $path '.git')) {
             return (Resolve-Path $path).Path
         }
 
@@ -135,14 +196,11 @@ function Select-SkillsRepo {
         Write-Host '  3. No shared skills repo'
         $choice = (Read-Host 'Choice (1/2/3)').Trim()
 
-        if ($choice -eq '1') { return Select-ExistingRepo }
         if ($choice -eq '3') { return $null }
 
-        if ($choice -eq '2') {
-            $repoPath = New-SkillsRepoFromTemplate
+        $repoPath = if ($choice -eq '1') { Select-ExistingRepo } elseif ($choice -eq '2') { New-SkillsRepoFromTemplate }
 
-            if ($repoPath) { return $repoPath }
-        }
+        if ($repoPath) { return $repoPath }
     }
 }
 
@@ -230,6 +288,8 @@ function Invoke-SkillsInstall($repoPath) {
     }
 }
 
+Test-Prerequisites
+Install-TerminalProfile
 Install-Shortcut
 
 if (Test-KeepCurrentConfig) {

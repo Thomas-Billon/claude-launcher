@@ -13,8 +13,8 @@ The menu has three modes, each with its own keys:
 from pathlib import Path
 
 from launcher import accounts, launcher_state
-from launcher.folder_menu import DEFAULT_FOLDER_HELP_TEXT, FolderEntry, format_folder_label, get_start_dir, prompt_for_folder
-from launcher.keyboard import MenuKey, read_menu_key
+from launcher.folder_menu import FolderEntry, format_folder_label, get_start_dir, prompt_for_folder
+from launcher.keyboard import Key, read_key
 from launcher.prompts import ask_account_name
 from launcher.terminal_ui import (
     BACK,
@@ -116,10 +116,10 @@ class AccountMenu:
         """Returns the chosen account, or QUIT."""
         while True:
             self.render()
-            key = read_menu_key()
+            key = read_key()
             self.message = None
 
-            if key == MenuKey.CTRL_C:
+            if key == Key.CTRL_C:
                 return QUIT
 
             if self.side_selection is None:
@@ -157,14 +157,14 @@ class AccountMenu:
         if self.account_selection.handle_key(key):
             return None
 
-        if key == MenuKey.ESC:
+        if key == Key.ESC:
             return QUIT
 
-        if key == MenuKey.RIGHT and self.account is not None:
+        if key == Key.RIGHT and self.account is not None:
             self.side_selection = build_options_selection()
-        elif key == MenuKey.ENTER and self.account is None:
+        elif key == Key.ENTER and self.account is None:
             self.add_account()
-        elif key == MenuKey.ENTER:
+        elif key == Key.ENTER:
             return self.account
 
         return None
@@ -183,12 +183,12 @@ class AccountMenu:
         if self.side_selection.handle_key(key):
             return None
 
-        if key in (MenuKey.LEFT, MenuKey.ESC):
+        if key in (Key.LEFT, Key.ESC):
             self.side_selection = None
 
             return None
 
-        if key != MenuKey.ENTER:
+        if key != Key.ENTER:
             return None
 
         actions = {
@@ -229,7 +229,6 @@ class AccountMenu:
             get_start_dir(account),
             self.header_lines,
             account,
-            DEFAULT_FOLDER_HELP_TEXT,
             Message("Choose the default folder of this account.", CYAN),
         )
 
@@ -298,9 +297,9 @@ class AccountMenu:
         if self.side_selection.handle_key(key):
             return None
 
-        if key in (MenuKey.LEFT, MenuKey.ESC):
+        if key in (Key.LEFT, Key.ESC):
             self.close_history()
-        elif key == MenuKey.ENTER:
+        elif key == Key.ENTER:
             self.remove_from_history()
 
         return None

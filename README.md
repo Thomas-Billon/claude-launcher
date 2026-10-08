@@ -3,7 +3,9 @@
 Launcher interactif pour **Claude Code** : choix du **compte**, puis du **projet**, puis lancement de `claude` dans le dossier choisi.
 
 - 🕘 Les **5 derniers dossiers** ouverts avec le compte en tête de liste
-- 📁 Puis les **sous-dossiers** du dossier par défaut, les plus récemment lancés en premier
+- 📁 Puis les **sous-dossiers** du dossier par défaut, par ordre alphabétique, filtrables en tapant
+- 💬 Nouvelle conversation, **reprise de la dernière** ou d'une conversation au choix
+- 🪟 Titre de fenêtre `Claude Code · <compte> · <projet>`
 - 🔄 **Synchro git** du launcher et du repo de skills partagés au démarrage
 
 > [!WARNING]
@@ -24,19 +26,22 @@ Launcher interactif pour **Claude Code** : choix du **compte**, puis du **projet
 ./install.ps1
 ```
 
-1. Crée le raccourci **« Claude Code »** dans le menu Démarrer
-2. Si `config.json` existe : affiche le repo de skills actuel et propose de le garder (fin du script)
-3. Sinon, choix du **repo de skills partagés** (enregistré dans `config.json`) :
-   - **Repo local existant** : saisie du chemin
+1. Signale en jaune les prérequis absents du `PATH` (`python`, `git`, `claude`), sans bloquer
+2. Avec Windows Terminal : ajoute le profil **« Claude Code »** (fragment `%LOCALAPPDATA%\Microsoft\Windows Terminal\Fragments\claude-launcher`), à recharger en redémarrant Windows Terminal s'il est ouvert
+3. Crée le raccourci **« Claude Code »** dans le menu Démarrer : nouvel onglet du profil dans la fenêtre [dédiée au launcher](#windows-terminal) avec Windows Terminal, sinon fenêtre PowerShell
+4. Si `config.json` existe : affiche le repo de skills actuel et propose de le garder (fin du script)
+5. Sinon, choix du **repo de skills partagés** (enregistré dans `config.json`) :
+   - **Repo local existant** : saisie du chemin (vide : retour au choix)
    - **Nouveau repo** depuis le template [claude-skills-base](https://github.com/Thomas-Billon/claude-skills-base) : « Use this template » dans le navigateur, collage de l'URL, puis `git clone` en local
    - **Aucun**
-4. Avec un repo : mise en place du [`CLAUDE.md` global](#claudemd-global)
-5. Propose de lancer l'`install.ps1` du repo de skills (jonctions, relais `~/.claude/CLAUDE.md`, remote `upstream`)
+6. Avec un repo : mise en place du [`CLAUDE.md` global](#claudemd-global)
+7. Propose de lancer l'`install.ps1` du repo de skills (jonctions, relais `~/.claude/CLAUDE.md`, remote `upstream`)
 
 > [!NOTE]
 > - Toute action git est **affichée puis confirmée** (`Y/N`). Aucun accès GitHub requis, seulement git.
 > - Repo déplacé ou nouvelle machine : **relancer le script** (chemins du raccourci déduits de l'emplacement du repo).
-> - Le raccourci peut ensuite être **épinglé à la barre des tâches**.
+> - Le raccourci peut ensuite être **épinglé à la barre des tâches**, ou recevoir une **touche globale** (Propriétés → Touche de raccourci, `Ctrl+Alt+<touche>`), conservée quand le script est relancé.
+> - L'épingle de la barre des tâches **ne suit pas** les changements du raccourci : après une réinstallation qui le modifie (ex. passage à Windows Terminal), la désépingler puis épingler à nouveau le raccourci du menu Démarrer.
 
 ### `CLAUDE.md` global
 
@@ -57,7 +62,7 @@ Avec un repo de skills, `~/.claude/CLAUDE.md` devient un **relais** qui importe 
 ./uninstall.ps1
 ```
 
-- 🗑️ Supprime le raccourci et `config.json` (après confirmation)
+- 🗑️ Supprime le raccourci, le profil Windows Terminal et `config.json` (après confirmation)
 - 👤 Pour chaque compte (`Y/N`) : `claude auth logout` puis suppression du dossier (jonctions retirées d'abord)
 - 🛡️ **Jamais touchés** : `~/.claude` et les repos clonés
 
@@ -66,9 +71,25 @@ Avec un repo de skills, `~/.claude/CLAUDE.md` devient un **relais** qui importe 
 Via le raccourci du menu Démarrer, ou en ligne de commande :
 
 ```powershell
-python claude_launcher.py                  # dossier par défaut du compte, sinon dossier utilisateur
-python claude_launcher.py -d <dossier>     # dossier racine ponctuel, prioritaire
+python claude_launcher.py                              # dossier par défaut du compte, sinon dossier utilisateur
+python claude_launcher.py -d <dossier>                 # dossier racine ponctuel, prioritaire
+python claude_launcher.py -a <compte>                  # saute le choix du compte
+python claude_launcher.py -a <compte> -d <dossier>     # lance Claude Code directement, sans menu
+python claude_launcher.py -a Perso -- --model opus     # arguments après -- passés à claude
 ```
+
+- `-a` : nom, adresse ou id du compte, sans tenir compte de la casse. `Échap` dans le choix du dossier revient quand même au choix du compte
+- Lancement direct : synchro des repos faite, dossier ajouté à l'historique
+
+### Windows Terminal
+
+Le raccourci lance `wt -w claude-launcher new-tab -p "Claude Code"`, via `pythonw` (sans console) : épinglée, une cible `wt.exe` (alias d'exécution de `WindowsApps`) donne une icône grise. Sans `pythonw`, il cible `wt.exe` directement.
+
+- 🪟 Chaque lancement ouvre un **nouvel onglet** dans la fenêtre nommée `claude-launcher`, créée si elle n'existe pas
+- 🛡️ Les **autres fenêtres** Windows Terminal ne reçoivent jamais d'onglet du launcher
+- ⌨️ Avec une touche globale sur le raccourci, un nouvel onglet launcher s'ouvre même pendant une session Claude
+- 🔄 Chaque onglet fait sa propre [synchro des repos](#mises-à-jour-au-démarrage)
+- ❌ L'onglet se ferme à la fin de la session (il reste ouvert si le launcher échoue)
 
 ### Choix du compte
 
@@ -83,16 +104,32 @@ python claude_launcher.py -d <dossier>     # dossier racine ponctuel, prioritair
 
 ### Choix du dossier
 
-Liste : les **5 dossiers récents** (`nom  (dossier parent)`), une ligne vide, puis les **sous-dossiers** du dossier courant.
+Liste : les **5 dossiers récents** (`nom  (dossier parent)`), une ligne vide, les **sous-dossiers** du dossier courant par ordre alphabétique, puis `+ New folder`. Dossier inaccessible : message `Access denied`, on reste sur place.
 
 | Touche | Action |
 |--------|--------|
 | `↑` `↓` | Sélectionner un dossier |
 | `→` | Entrer dans le dossier |
-| `←` | Remonter au dossier parent |
-| `Entrée` | **Lancer Claude Code** |
-| `Échap` | Revenir au choix du compte |
+| `←` | Remonter au dossier parent (le dossier quitté reste sélectionné) |
+| Lettres | **Filtrer** récents et sous-dossiers par nom (affiché `[filter: …]`) |
+| `Retour arrière` | Effacer le dernier caractère du filtre |
+| `Tab` | Changer de [session](#session) |
+| `Entrée` | **Lancer Claude Code** (ou créer un dossier sur `+ New folder`) |
+| `Échap` | Vider le filtre, sinon revenir au choix du compte |
 | `Ctrl+C` | Quitter |
+
+- 📁 `+ New folder` : demande un nom (pré-rempli avec le filtre), crée le dossier dans le dossier courant puis le sélectionne
+- 🪟 Titre de l'onglet : `Claude Code · <compte> · <projet>` au lancement, puis Claude Code le remplace par `✳ <sujet>`, animé pendant le traitement
+
+#### Session
+
+Ligne `Session` de l'en-tête, `Tab` passe à la suivante :
+
+| Session | Commande |
+|---------|----------|
+| `new conversation` | `claude` |
+| `continue the last conversation` | `claude --continue` |
+| `resume a conversation, picked in Claude Code` | `claude --resume` |
 
 ## Comptes
 
@@ -122,7 +159,7 @@ Nom et adresse mail (en gris) affichés pour chaque compte, triés par ordre alp
 | `Clear history` | Vide l'historique du compte (après confirmation) |
 | `Delete account` | Déconnecte, retire les jonctions et supprime dossier, réglages et historique (après confirmation) |
 
-- 🕘 **Historique** : date du dernier lancement de chaque dossier, par compte. Sert aux dossiers récents et au tri.
+- 🕘 **Historique** : date du dernier lancement des dossiers, par compte. Seuls les 5 plus récents encore existants sont gardés, ceux affichés en dossiers récents.
 - ⚠️ **Doublon** : avertissement à la fermeture si un autre compte utilise la même adresse.
 - 🏷️ Un compte sans nom (antérieur aux noms) affiche son adresse.
 
@@ -145,7 +182,7 @@ Avant le menu, synchro du **repo du launcher** puis du **repo de skills** (une l
 
 | # | Situation | Question | Commande |
 |---|-----------|----------|----------|
-| 1 | Changements non commités | `N changed files, commit & push?` | `git add --all` + commit (message modifiable) |
+| 1 | Changements non commités | `N changed files, commit & push?` (fichiers listés au-dessus) | `git add --all` + commit (message modifiable) |
 | 2 | Nouveaux commits distants | `N new commits, pull?` | `git pull --rebase=merges --autostash` |
 | 3 | Commits locaux non poussés | `N local commits not pushed, push?` | `git push` |
 
@@ -176,16 +213,16 @@ Sans repo : étape ignorée. Pour activer, changer ou désactiver : relancer `./
 | Fichier | Rôle |
 |---------|------|
 | `claude_launcher.py` | **Point d'entrée** : arguments, enchaînement des étapes, relance après mise à jour |
-| `install.ps1` | Raccourci, repo de skills, `CLAUDE.md` global |
-| `uninstall.ps1` | Suppression du raccourci, de la config et des comptes |
+| `install.ps1` | Raccourci, profil Windows Terminal, repo de skills, `CLAUDE.md` global |
+| `uninstall.ps1` | Suppression du raccourci, du profil Windows Terminal, de la config et des comptes |
 | `launcher/paths.py` | Chemins utilisés (repo, `config.json`, `~/.claude-accounts`, `~/.claude`) |
 | `launcher/repo_sync.py` | Synchro des repos au démarrage |
 | `launcher/git_repo.py` | Commandes git (fetch, pull, merge, commit, push) |
 | `launcher/accounts.py` | Comptes : dossiers, jonctions, commande de lancement |
 | `launcher/launcher_state.py` | `launcher_state.json` : nom, dossier par défaut, historique |
 | `launcher/account_menu.py` | Menu des comptes, options et historique |
-| `launcher/folder_menu.py` | Choix du dossier |
-| `launcher/prompts.py` | Questions `Y/N`, messages de commit, noms de compte |
+| `launcher/folder_menu.py` | Choix du dossier : filtre, nouveau dossier, session |
+| `launcher/prompts.py` | Questions `Y/N`, messages de commit, noms de compte et de dossier |
 | `launcher/keyboard.py` | Lecture du clavier |
 | `launcher/terminal_ui.py` | Rendu console : en-tête, listes, messages |
 

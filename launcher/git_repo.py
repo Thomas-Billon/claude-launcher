@@ -20,15 +20,24 @@ def run_command(command, cwd, timeout=None):
     # INFO: GIT_TERMINAL_PROMPT=0 makes git fail instead of hanging on a credential prompt
     environment = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
 
-    return subprocess.run(
+    with subprocess.Popen(
         command,
         cwd=cwd,
         env=environment,
-        capture_output=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
         text=True,
         errors="replace",
-        timeout=timeout,
-    )
+    ) as process:
+        try:
+            stdout, stderr = process.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            # INFO: Killing git alone is not enough, its git-remote-https child keeps the pipes open until the fetch ends
+            subprocess.run(["taskkill", "/F", "/T", "/PID", str(process.pid)], capture_output=True)
+            process.communicate()
+            raise
+
+    return subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
 
 
 def run_git(repo, *arguments, timeout=None):

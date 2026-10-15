@@ -1,7 +1,7 @@
 ﻿# INFO: Installs the launcher on this machine:
 # 1. the "Claude Code" Start menu shortcut, pointing to the launcher of this repo (run again if the repo is moved).
 #    With Windows Terminal, the launcher runs in a "Claude Code" profile, added through a fragment, and the shortcut
-#    opens it as a new tab of the window dedicated to the launcher;
+#    opens it either as a new tab of the window dedicated to the launcher or in a new window, as chosen by the user;
 # 2. the shared skills repo: an existing local one, a new one created from the base repo template, or none.
 #    Its path is saved in config.json (not versioned), which the launcher reads to sync it;
 # 3. the global CLAUDE.md, turned into a relay to the CLAUDE.md of the skills repo;
@@ -22,6 +22,20 @@ function Read-YesNo($question) {
 
         if ($answer -eq 'Y') { return $true }
         if ($answer -eq 'N') { return $false }
+    }
+}
+
+function Read-ShortcutWindow {
+    Write-Host 'Shortcut opening:'
+    Write-Host '  1. New tab in the launcher window'
+    Write-Host '  2. New window'
+
+    while ($true) {
+        $choice = (Read-Host 'Choice (1/2)').Trim()
+
+        if ($choice -eq '1') { return $terminalWindowName }
+        # INFO: "new" is the wt window id that always creates a new window
+        if ($choice -eq '2') { return 'new' }
     }
 }
 
@@ -66,6 +80,7 @@ function Install-Shortcut {
     $shortcutPath = Join-Path $programsDirectory 'Claude Code.lnk'
     $windowsTerminal = Get-Command wt -ErrorAction SilentlyContinue
     $pythonw = Find-RegularExecutable 'pythonw'
+    $window = if ($windowsTerminal) { Read-ShortcutWindow }
 
     # INFO: CreateShortcut loads the existing shortcut, so a hotkey set by the user in its properties is kept
     $shortcut = (New-Object -ComObject WScript.Shell).CreateShortcut($shortcutPath)
@@ -74,10 +89,10 @@ function Install-Shortcut {
         # INFO: The taskbar shows a blank icon for a pinned shortcut to wt.exe, an app execution alias: pythonw, a regular
         # executable without a console window, starts it instead
         $shortcut.TargetPath = $pythonw
-        $shortcut.Arguments = "-c `"import subprocess; subprocess.Popen(['wt', '-w', '$terminalWindowName', 'new-tab', '-p', '$terminalProfileName'])`""
+        $shortcut.Arguments = "-c `"import subprocess; subprocess.Popen(['wt', '-w', '$window', 'new-tab', '-p', '$terminalProfileName'])`""
     } elseif ($windowsTerminal) {
         $shortcut.TargetPath = $windowsTerminal.Source
-        $shortcut.Arguments = "-w $terminalWindowName new-tab -p `"$terminalProfileName`""
+        $shortcut.Arguments = "-w $window new-tab -p `"$terminalProfileName`""
     } else {
         # INFO: Quotes doubled since the path is passed in a single-quoted PowerShell string
         $launcherPath = (Join-Path $PSScriptRoot 'claude_launcher.py') -replace "'", "''"

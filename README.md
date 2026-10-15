@@ -28,7 +28,7 @@ Launcher interactif pour **Claude Code** : choix du **compte**, puis du **projet
 
 1. Signale en jaune les prérequis absents du `PATH` (`python`, `git`, `claude`), sans bloquer
 2. Avec Windows Terminal : ajoute le profil **« Claude Code »** (fragment `%LOCALAPPDATA%\Microsoft\Windows Terminal\Fragments\claude-launcher`), à recharger en redémarrant Windows Terminal s'il est ouvert
-3. Crée le raccourci **« Claude Code »** dans le menu Démarrer : nouvel onglet du profil dans la fenêtre [dédiée au launcher](#windows-terminal) avec Windows Terminal, sinon fenêtre PowerShell
+3. Crée le raccourci **« Claude Code »** dans le menu Démarrer (remplace l'existant). Avec Windows Terminal, choix de son ouverture : **nouvel onglet** du profil dans la fenêtre [dédiée au launcher](#windows-terminal) ou **nouvelle fenêtre**. Sinon, fenêtre PowerShell
 4. Si `config.json` existe : affiche le repo de skills actuel et propose de le garder (fin du script)
 5. Sinon, choix du **repo de skills partagés** (enregistré dans `config.json`) :
    - **Repo local existant** : saisie du chemin (vide : retour au choix)
@@ -83,11 +83,11 @@ python claude_launcher.py -a Perso -- --model opus     # arguments après -- pas
 
 ### Windows Terminal
 
-Le raccourci lance `wt -w claude-launcher new-tab -p "Claude Code"`, via `pythonw` (sans console) : épinglée, une cible `wt.exe` (alias d'exécution de `WindowsApps`) donne une icône grise. Sans `pythonw`, il cible `wt.exe` directement.
+Le raccourci lance `wt -w claude-launcher new-tab -p "Claude Code"` (nouvel onglet) ou `wt -w new new-tab -p "Claude Code"` (nouvelle fenêtre), selon le choix fait à l'installation, via `pythonw` (sans console) : épinglée, une cible `wt.exe` (alias d'exécution de `WindowsApps`) donne une icône grise. Sans `pythonw`, il cible `wt.exe` directement.
 
-- 🪟 Chaque lancement ouvre un **nouvel onglet** dans la fenêtre nommée `claude-launcher`, créée si elle n'existe pas
+- 🪟 Mode onglet : chaque lancement ouvre un **nouvel onglet** dans la fenêtre nommée `claude-launcher`, créée si elle n'existe pas. Mode fenêtre : chaque lancement ouvre une **nouvelle fenêtre**
 - 🛡️ Les **autres fenêtres** Windows Terminal ne reçoivent jamais d'onglet du launcher
-- ⌨️ Avec une touche globale sur le raccourci, un nouvel onglet launcher s'ouvre même pendant une session Claude
+- ⌨️ Avec une touche globale sur le raccourci, un nouveau launcher s'ouvre même pendant une session Claude
 - 🔄 Chaque onglet fait sa propre [synchro des repos](#mises-à-jour-au-démarrage)
 - ❌ L'onglet se ferme à la fin de la session (il reste ouvert si le launcher échoue)
 

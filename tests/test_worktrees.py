@@ -1,11 +1,13 @@
 import shutil
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
 from launcher import worktrees, worktrees_state
-from tests.git_helpers import branch_exists, commit_file, commit_on_branch, configure_identity, git_output, make_repo, run
+from tests.git_helpers import commit_on_branch, configure_identity, make_repo, run
 
 
 class WorktreesTestCase(unittest.TestCase):
@@ -89,79 +91,78 @@ class CreationTest(WorktreesTestCase):
         self.assertEqual(worktree.source_branch, "dev")
 
 
-class FinishTest(WorktreesTestCase):
-    def test_merge_fast_forwards_the_source(self):
-        worktree = worktrees.create_worktree(self.repo, "feature", "dev")
-        commit_file(worktree.path, "feature.txt", "done")
+class HandoffBranchTest(WorktreesTestCase):
+    def test_pushed_handoff_branch_becomes_the_source_of_a_new_worktree(self):
+        run(self.repo, "branch", "feature/handoff")
+        commit_on_branch(self.repo, "feature/handoff", "progress.txt", "half done")
+        clone = self.root / "clone"
+        run(self.root, "clone", "--quiet", str(self.repo), str(clone))
+        configure_identity(clone)
 
-        self.assertTrue(worktrees.merge_into_source(self.repo, worktree))
-        self.assertTrue(worktrees.remove_worktree(self.repo, worktree))
-        self.assertEqual(git_output(self.repo, "show", "dev:feature.txt"), "done")
-        self.assertFalse(worktree.path.exists())
-        self.assertFalse(branch_exists(self.repo, "temp/feature"))
+        self.assertIn("origin/feature/handoff", worktrees.list_branches(clone))
 
-    def test_merge_rebases_when_the_source_moved(self):
-        worktree = worktrees.create_worktree(self.repo, "feature", "dev")
-        commit_file(worktree.path, "feature.txt", "done")
-        commit_on_branch(self.repo, "dev", "other.txt", "meanwhile")
+        worktree = worktrees.create_worktree(clone, "resume", "origin/feature/handoff")
 
-        self.assertTrue(worktrees.merge_into_source(self.repo, worktree))
-        self.assertEqual(git_output(self.repo, "rev-list", "--merges", "--count", "dev"), "0")
-        self.assertEqual(git_output(self.repo, "show", "dev:other.txt"), "meanwhile")
-        self.assertEqual(git_output(self.repo, "show", "dev:feature.txt"), "done")
+        self.assertEqual(worktree.source_branch, "feature/handoff")
+        self.assertEqual(worktree.branch, "temp/resume")
+        self.assertEqual((worktree.path / "progress.txt").read_text(), "half done")
 
-    def test_merge_into_the_checked_out_source_keeps_unrelated_changes(self):
-        run(self.repo, "switch", "--quiet", "dev")
-        worktree = worktrees.create_worktree(self.repo, "feature", "dev")
-        commit_file(worktree.path, "feature.txt", "done")
-        (self.repo / "README.md").write_text("work in progress")
 
-        self.assertTrue(worktrees.merge_into_source(self.repo, worktree))
-        self.assertEqual((self.repo / "README.md").read_text(), "work in progress")
-        self.assertEqual((self.repo / "feature.txt").read_text(), "done")
+class OrphanFolderTest(WorktreesTestCase):
+    def lock_folder(self, folder):
+        # INFO: On Windows, a process whose current directory is the folder prevents its removal
+        process = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"], cwd=folder)
+        self.addCleanup(process.wait)
+        self.addCleanup(process.kill)
 
-    def test_merge_is_refused_over_changes_on_the_same_file(self):
-        run(self.repo, "switch", "--quiet", "dev")
-        worktree = worktrees.create_worktree(self.repo, "feature", "dev")
-        commit_file(worktree.path, "README.md", "from worktree")
-        (self.repo / "README.md").write_text("work in progress")
+    def unregister(self, worktree):
+        """Removes the worktree with git alone, as done from a Claude Code session, leaving its folder empty."""
+        run(self.repo, "worktree", "remove", "--force", str(worktree.path))
+        run(self.repo, "branch", "--quiet", "-D", worktree.branch)
+        worktree.path.mkdir(exist_ok=True)
 
-        self.assertFalse(worktrees.merge_into_source(self.repo, worktree))
-        self.assertEqual((self.repo / "README.md").read_text(), "work in progress")
-        self.assertTrue(branch_exists(self.repo, "temp/feature"))
-        self.assertTrue(worktree.path.exists())
+    def test_worktree_unregistered_by_git_leaves_the_list(self):
+        kept = worktrees.create_worktree(self.repo, "kept", "dev")
+        removed = worktrees.create_worktree(self.repo, "removed", "dev")
+        run(self.repo, "worktree", "remove", "--force", str(removed.path))
 
-    def test_rebase_conflict_leaves_the_worktree_as_it_was(self):
-        worktree = worktrees.create_worktree(self.repo, "feature", "dev")
-        commit_file(worktree.path, "README.md", "from worktree")
-        commit_on_branch(self.repo, "dev", "README.md", "from dev")
-        head = git_output(worktree.path, "rev-parse", "HEAD")
+        self.assertEqual(worktrees.load_worktrees(self.repo), [kept])
+        self.assertEqual(worktrees_state.load_worktree_sources(self.repo), {"kept": "dev"})
 
-        self.assertFalse(worktrees.merge_into_source(self.repo, worktree))
-        self.assertEqual(git_output(worktree.path, "rev-parse", "HEAD"), head)
-        self.assertEqual(worktrees.list_worktree_changes(worktree), [])
+    def test_empty_folder_left_by_an_unregistered_worktree_is_removed(self):
+        kept = worktrees.create_worktree(self.repo, "kept", "dev")
+        removed = worktrees.create_worktree(self.repo, "removed", "dev")
+        self.unregister(removed)
 
-    def test_keep_as_branch_renames_the_branch(self):
-        worktree = worktrees.create_worktree(self.repo, "long-fix", "dev")
-        commit_file(worktree.path, "fix.txt", "fixed")
+        self.assertEqual(worktrees.load_worktrees(self.repo), [kept])
+        self.assertFalse(removed.path.exists())
+        self.assertTrue(kept.path.exists())
+        self.assertIsNone(worktrees.validate_worktree_name(self.repo, "removed"))
 
-        self.assertTrue(worktrees.keep_as_branch(self.repo, worktree, "fix/long-fix"))
-        self.assertTrue(worktrees.remove_worktree(self.repo, worktree))
-        self.assertTrue(branch_exists(self.repo, "fix/long-fix"))
-        self.assertFalse(branch_exists(self.repo, "temp/long-fix"))
+    def test_non_empty_unknown_folder_is_kept(self):
+        notes = worktrees.get_repo_dir(self.repo) / "notes"
+        notes.mkdir(parents=True)
+        (notes / "todo.txt").write_text("keep me")
+
         self.assertEqual(worktrees.load_worktrees(self.repo), [])
+        self.assertEqual((notes / "todo.txt").read_text(), "keep me")
 
-    def test_keep_as_branch_refuses_an_existing_branch(self):
-        worktree = worktrees.create_worktree(self.repo, "long-fix", "dev")
+    def test_unknown_file_is_kept(self):
+        repo_dir = worktrees.get_repo_dir(self.repo)
+        repo_dir.mkdir(parents=True)
+        (repo_dir / "notes.txt").write_text("keep me")
 
-        self.assertFalse(worktrees.keep_as_branch(self.repo, worktree, "dev"))
-        self.assertTrue(branch_exists(self.repo, "temp/long-fix"))
+        worktrees.load_worktrees(self.repo)
 
-    def test_delete_reports_then_drops_unmerged_commits(self):
-        worktree = worktrees.create_worktree(self.repo, "dropped", "dev")
-        commit_file(worktree.path, "a.txt", "a")
+        self.assertEqual((repo_dir / "notes.txt").read_text(), "keep me")
 
-        self.assertEqual(worktrees.count_unmerged_commits(self.repo, worktree), 1)
-        self.assertTrue(worktrees.delete_worktree(self.repo, worktree))
-        self.assertFalse(branch_exists(self.repo, "temp/dropped"))
-        self.assertFalse(worktree.path.exists())
+    def test_locked_empty_folder_does_not_prevent_loading(self):
+        kept = worktrees.create_worktree(self.repo, "kept", "dev")
+        removed = worktrees.create_worktree(self.repo, "busy", "dev")
+        self.unregister(removed)
+        self.lock_folder(removed.path)
+
+        self.assertEqual(worktrees.load_worktrees(self.repo), [kept])
+
+    def test_repo_without_worktrees_folder_loads(self):
+        self.assertEqual(worktrees.load_worktrees(self.repo), [])

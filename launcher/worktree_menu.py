@@ -2,10 +2,10 @@
 Worktree menu: picks where Claude Code is launched in a git repo, its main folder or one of its worktrees (see worktrees.py).
 
 The list holds a new worktree entry, the main folder entry, then the worktrees of the repo.
-Right opens the options of the highlighted entry in a right column: the base branches of
-the repo for the new worktree entry, finish (merge into its source branch or keep its
-branch) and delete for a worktree. Left/Esc closes them. Tab cycles the session mode, as
-in the folder menu.
+Right opens the options of the new worktree entry in a right column: editing the base
+branches of the repo, or a worktree started from any branch of the repo, remote ones
+included, without saving it as a base branch. Left/Esc closes them. Tab cycles the
+session mode, as in the folder menu.
 
 A new worktree is named, then started from one of the base branches of the repo, picked
 in a list unless there is only one. The first time, the base branches are checked in the
@@ -17,7 +17,7 @@ from launcher.account_menu import OPTIONS_HELP_TEXT
 from launcher.accounts import account_header_line
 from launcher.folder_menu import NEW_SESSION, SESSION_MODES, session_header_line
 from launcher.keyboard import Key, read_key
-from launcher.prompts import ask_branch_name, ask_worktree_name
+from launcher.prompts import ask_worktree_name
 from launcher.terminal_ui import (
     BACK,
     COLUMN_SEPARATOR,
@@ -27,7 +27,6 @@ from launcher.terminal_ui import (
     QUIT,
     RED,
     SEPARATOR,
-    YELLOW,
     HeaderLine,
     ListSelection,
     Message,
@@ -40,25 +39,15 @@ BASE_BRANCHES_HELP_TEXT = "  Up/Down: Highlight   Space: Check   Enter: Save   E
 BRANCH_PICKER_HELP_TEXT = "  Up/Down: Highlight   Enter: Select   Esc: Back   Ctrl+C: Quit"
 
 BASE_BRANCHES_MESSAGE = Message("Choose the base branches of this folder.", CYAN)
-BRANCH_PICKER_MESSAGE = Message("Base branch of the new worktree.", CYAN)
+BRANCH_PICKER_MESSAGE = Message("Source branch of the new worktree.", CYAN)
 
 # INFO: Entries of the list besides the worktrees, NO_WORKTREE is also the outcome of the menu for the main folder
 ADD_WORKTREE = object()
 NO_WORKTREE = object()
 
 EDIT_BASE_BRANCHES = "Edit base branches"
-FINISH_WORKTREE = "Finish worktree"
-DELETE_WORKTREE = "Delete worktree"
-# INFO: Labelled with the source branch of the highlighted worktree
-MERGE_INTO_SOURCE = "Merge into source"
-KEEP_AS_BRANCH = "Keep as branch"
-CANCEL = "Cancel"
-CONFIRM_DELETE = "Confirm delete"
-ADD_WORKTREE_OPTIONS = [EDIT_BASE_BRANCHES]
-WORKTREE_OPTIONS = [FINISH_WORKTREE, DELETE_WORKTREE]
-FINISH_OPTIONS = [MERGE_INTO_SOURCE, KEEP_AS_BRANCH]
-# INFO: Cancel comes first so that a double Enter never deletes a worktree
-DELETE_OPTIONS = [CANCEL, CONFIRM_DELETE]
+WORKTREE_FROM_BRANCH = "Worktree from branch"
+ADD_WORKTREE_OPTIONS = [EDIT_BASE_BRANCHES, WORKTREE_FROM_BRANCH]
 
 
 def worktree_header_line(worktree, color):
@@ -74,25 +63,6 @@ def entry_label(entry):
 
 def entry_secondary_label(entry):
     return f"from {entry.source_branch}" if isinstance(entry, worktrees.Worktree) else None
-
-
-def delete_warning(worktree, unmerged_count):
-    """Returns the warning shown before deleting the worktree, or None when all its commits are merged."""
-    if unmerged_count is None:
-        return Message(
-            f"Could not count the commits of {worktree.name} not merged into {worktree.source_branch}, they would be lost.",
-            YELLOW,
-        )
-
-    if unmerged_count == 0:
-        return None
-
-    return Message(f"{unmerged_count} commits of {worktree.name} are not merged into {worktree.source_branch}.", YELLOW)
-
-
-def format_changes(worktree, changes):
-    # INFO: A porcelain status line is the 2 status letters, a space, then the path
-    return f"Uncommitted changes in {worktree.name}: {', '.join(line[3:] for line in changes)}"
 
 
 def prompt_for_base_branches(repo, header_lines):
@@ -158,11 +128,9 @@ class WorktreeMenu:
         self.account = account
         self.session_index = SESSION_MODES.index(session)
         self.selection = None
-        # INFO: Right column, None while closed. It lists the options of the highlighted entry
+        # INFO: Right column of the new worktree options, None while closed
         self.side_selection = None
         self.message = None
-        # INFO: Shown as long as the delete confirmation is open, unlike the message which only lasts until the next key
-        self.confirmation_message = None
         self.reload()
 
     @property
@@ -225,8 +193,7 @@ class WorktreeMenu:
             )
 
         help_text = WORKTREE_HELP_TEXT if self.side_selection is None else OPTIONS_HELP_TEXT
-        is_confirming = self.side_selection is not None and self.side_selection.items is DELETE_OPTIONS
-        render_screen(self.screen_lines, render_body, help_text, self.message or (self.confirmation_message if is_confirming else None))
+        render_screen(self.screen_lines, render_body, help_text, self.message)
 
     def handle_list_key(self, key):
         if self.selection.handle_key(key):
@@ -241,8 +208,6 @@ class WorktreeMenu:
             self.session_index = (self.session_index + 1) % len(SESSION_MODES)
         elif key == Key.RIGHT and entry is ADD_WORKTREE:
             self.side_selection = ListSelection(ADD_WORKTREE_OPTIONS)
-        elif key == Key.RIGHT and entry is not NO_WORKTREE:
-            self.side_selection = ListSelection(WORKTREE_OPTIONS)
         elif key == Key.ENTER and entry is ADD_WORKTREE:
             return self.add_worktree()
         elif key == Key.ENTER:
@@ -250,8 +215,8 @@ class WorktreeMenu:
 
         return None
 
-    def add_worktree(self):
-        """Returns the created worktree, QUIT on Ctrl+C, or None to stay in the menu."""
+    def ask_valid_worktree_name(self):
+        """Returns the name of the new worktree, None on Esc or on an invalid name (the menu shows why)."""
         name = ask_worktree_name(self.screen_lines)
 
         if name is None:
@@ -264,13 +229,10 @@ class WorktreeMenu:
 
             return None
 
-        base_branches = worktrees_state.load_base_branches(self.repo) or prompt_for_base_branches(self.repo, self.screen_lines)
+        return name
 
-        if base_branches is None or base_branches is QUIT:
-            return base_branches
-
-        source_branch = base_branches[0] if len(base_branches) == 1 else prompt_for_branch(base_branches, self.screen_lines)
-
+    def start_worktree(self, name, source_branch):
+        """Creates the worktree from the picked source branch. Returns it, QUIT on Ctrl+C, or None to stay in the menu."""
         if source_branch is QUIT:
             return QUIT
 
@@ -283,6 +245,22 @@ class WorktreeMenu:
             self.message = Message("Could not create the worktree.", RED)
 
         return worktree
+
+    def add_worktree(self):
+        """Returns the created worktree, QUIT on Ctrl+C, or None to stay in the menu."""
+        name = self.ask_valid_worktree_name()
+
+        if name is None:
+            return None
+
+        base_branches = worktrees_state.load_base_branches(self.repo) or prompt_for_base_branches(self.repo, self.screen_lines)
+
+        if base_branches is None or base_branches is QUIT:
+            return base_branches
+
+        source_branch = base_branches[0] if len(base_branches) == 1 else prompt_for_branch(base_branches, self.screen_lines)
+
+        return self.start_worktree(name, source_branch)
 
     def handle_options_key(self, key):
         if self.side_selection.handle_key(key):
@@ -298,15 +276,23 @@ class WorktreeMenu:
 
         actions = {
             EDIT_BASE_BRANCHES: self.edit_base_branches,
-            FINISH_WORKTREE: self.ask_finish_worktree,
-            MERGE_INTO_SOURCE: self.merge_into_source,
-            KEEP_AS_BRANCH: self.keep_as_branch,
-            DELETE_WORKTREE: self.ask_delete_worktree,
-            CONFIRM_DELETE: self.delete_worktree,
-            CANCEL: self.cancel_delete,
+            WORKTREE_FROM_BRANCH: self.add_worktree_from_branch,
         }
 
         return actions[self.side_selection.selected]()
+
+    def add_worktree_from_branch(self):
+        """Creates a worktree started from any branch of the repo, local or remote, without saving it as a base branch.
+        Returns the created worktree, QUIT on Ctrl+C, or None to stay in the menu."""
+        self.side_selection = None
+        name = self.ask_valid_worktree_name()
+
+        if name is None:
+            return None
+
+        source_branch = prompt_for_branch(worktrees.list_branches(self.repo), self.screen_lines)
+
+        return self.start_worktree(name, source_branch)
 
     def edit_base_branches(self):
         self.side_selection = None
@@ -317,93 +303,6 @@ class WorktreeMenu:
 
         if base_branches is not None:
             self.message = Message("Base branches saved.", GREEN)
-
-        return None
-
-    def can_finish(self):
-        """Returns whether the highlighted worktree can be finished or deleted, else shows why."""
-        worktree = self.entry
-        changes = worktrees.list_worktree_changes(worktree)
-
-        if changes:
-            self.message = Message(format_changes(worktree, changes), RED)
-        elif not worktrees.is_on_its_branch(worktree):
-            self.message = Message(f"{worktree.name} is not on {worktree.branch} anymore, switch back to it first.", RED)
-        else:
-            return True
-
-        self.side_selection = None
-
-        return False
-
-    def report_removal(self, worktree, done_text):
-        if worktrees.remove_worktree(self.repo, worktree):
-            self.message = Message(f"{done_text}.", GREEN)
-        else:
-            self.message = Message(f"{done_text}, but the worktree folder could not be removed, is Claude Code still running in it?", YELLOW)
-
-    def ask_finish_worktree(self):
-        if self.can_finish():
-            source_branch = self.entry.source_branch
-            self.side_selection = ListSelection(
-                FINISH_OPTIONS, lambda option: f"Merge into {source_branch}" if option == MERGE_INTO_SOURCE else option
-            )
-
-        return None
-
-    def merge_into_source(self):
-        worktree = self.entry
-        self.side_selection = None
-
-        if worktrees.merge_into_source(self.repo, worktree):
-            self.report_removal(worktree, f"Merged into {worktree.source_branch}")
-        else:
-            self.message = Message(f"Could not merge into {worktree.source_branch}, nothing was lost.", RED)
-
-        self.reload(worktree)
-
-        return None
-
-    def keep_as_branch(self):
-        worktree = self.entry
-        self.side_selection = None
-        branch = ask_branch_name(self.screen_lines)
-
-        if branch is None:
-            return None
-
-        if worktrees.keep_as_branch(self.repo, worktree, branch):
-            self.report_removal(worktree, f"Branch {branch} kept, push it to open a pull request")
-        else:
-            self.message = Message(f"Could not rename the branch to {branch}.", RED)
-
-        self.reload(worktree)
-
-        return None
-
-    def ask_delete_worktree(self):
-        if self.can_finish():
-            worktree = self.entry
-            self.side_selection = ListSelection(DELETE_OPTIONS)
-            self.confirmation_message = delete_warning(worktree, worktrees.count_unmerged_commits(self.repo, worktree))
-
-        return None
-
-    def delete_worktree(self):
-        worktree = self.entry
-        self.side_selection = None
-
-        if worktrees.delete_worktree(self.repo, worktree):
-            self.message = Message("Worktree deleted.", GREEN)
-        else:
-            self.message = Message("Could not delete the worktree, is Claude Code still running in it?", RED)
-
-        self.reload(worktree)
-
-        return None
-
-    def cancel_delete(self):
-        self.side_selection = ListSelection(WORKTREE_OPTIONS, selected_index=WORKTREE_OPTIONS.index(DELETE_WORKTREE))
 
         return None
 

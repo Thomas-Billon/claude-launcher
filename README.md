@@ -148,21 +148,16 @@ Ligne `Session` de l'en-tête, `Tab` passe à la suivante :
 
 - 🌳 `+ Worktree` : nom du worktree, puis branche de départ parmi les **branches de départ** du repo (choix sauté s'il n'y en a qu'une), puis lancement de Claude Code dans `~/.claude-worktrees/<id>/<nom>/`, sur une nouvelle branche `temp/<nom>`
 - 🌿 **Branches de départ** : choisies au premier `+ Worktree` du repo, parmi ses branches locales puis distantes (`Espace` coche, `Entrée` enregistre, `Échap` annule). Une branche distante choisie crée la branche locale qui la suit
-- 🧹 Worktrees dont le dossier a été supprimé à la main : retirés à l'ouverture de l'étape (`git worktree prune`), leur branche `temp/` est gardée
+- 🧹 À l'ouverture de l'étape : les worktrees dont le dossier a été supprimé sont retirés (`git worktree prune`, leur branche `temp/` est gardée), et les dossiers vides restés dans `~/.claude-worktrees/<id>/` (worktree supprimé pendant que Claude Code tournait dedans) sont supprimés. Un dossier non vide n'est jamais touché
 - 🪟 Titre de l'onglet : `Claude Code · <compte> · <projet> · <worktree>`. L'historique garde le dossier choisi, jamais le chemin d'un worktree
 
 | Option | Sur | Effet |
 |--------|-----|-------|
 | `Edit base branches` | `+ Worktree` | Modifie les branches de départ du repo |
-| `Finish worktree` → `Merge into <source>` | Un worktree | Rebase de `temp/<nom>` sur sa branche source, fusion en fast-forward, puis suppression du worktree et de `temp/<nom>` |
-| `Finish worktree` → `Keep as branch` | Un worktree | Renomme `temp/<nom>` (ex. `fix/long-fix`), gardée en local pour un push et une PR faits à la main, puis supprime le worktree |
-| `Delete worktree` | Un worktree | Supprime le worktree et `temp/<nom>` (après confirmation, avec le nombre de commits non fusionnés) |
+| `Worktree from branch` | `+ Worktree` | Nom du worktree, puis n'importe quelle branche du repo, locale ou distante (une branche distante crée la branche locale qui la suit), sans l'enregistrer comme branche de départ. Sert à reprendre sur une autre machine une branche poussée depuis la première |
 
 > [!IMPORTANT]
-> - Le launcher ne **pousse jamais** rien : les branches `temp/` restent locales, la branche source est poussée à la main une fois le travail validé.
-> - `Finish worktree` et `Delete worktree` sont **refusés** tant que le worktree a des changements non commités (fichiers listés), ou qu'il n'est plus sur sa branche `temp/<nom>` (ses commits ailleurs seraient perdus).
-> - Dossier du worktree impossible à supprimer (Claude Code encore lancé dedans) : la fusion ou le renommage restent faits, un message en jaune le signale.
-> - Fusion dans une branche sortie dans le dossier principal : faite dans ce dossier, **refusée par git** si ses changements en cours touchent les mêmes fichiers. Conflit de rebase : tout est annulé, rien n'est perdu.
+> - Terminer ou supprimer un worktree se fait **hors du launcher**, avec git ou depuis Claude Code. Le launcher ne **pousse jamais** rien.
 
 ## Comptes
 
@@ -256,7 +251,7 @@ Sans repo : étape ignorée. Pour activer, changer ou désactiver : relancer `./
 | `launcher/account_menu.py` | Menu des comptes, options et historique |
 | `launcher/folder_menu.py` | Choix du dossier : filtre, nouveau dossier, session |
 | `launcher/worktree_menu.py` | Choix du worktree : options, branches de départ, choix de la branche |
-| `launcher/worktrees.py` | Worktrees : création, liste, fusion, suppression (commandes git) |
+| `launcher/worktrees.py` | Worktrees : création, liste, nettoyage des dossiers vides (commandes git) |
 | `launcher/worktrees_state.py` | `worktrees_state.json` : id, branches de départ et branche source des worktrees, par repo |
 | `launcher/json_store.py` | Lecture et écriture atomique des fichiers JSON d'état |
 | `launcher/prompts.py` | Questions `Y/N`, messages de commit, noms de compte et de dossier |

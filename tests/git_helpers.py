@@ -9,14 +9,6 @@ def run(repo, *arguments):
     subprocess.run(["git", *arguments], cwd=repo, check=True, capture_output=True)
 
 
-def git_output(repo, *arguments):
-    return subprocess.run(["git", *arguments], cwd=repo, check=True, capture_output=True, text=True).stdout.strip()
-
-
-def branch_exists(repo, branch):
-    return subprocess.run(["git", "rev-parse", "--verify", "--quiet", f"refs/heads/{branch}"], cwd=repo, capture_output=True).returncode == 0
-
-
 def configure_identity(repo):
     run(repo, "config", "user.name", "Tests")
     run(repo, "config", "user.email", "tests@example.com")

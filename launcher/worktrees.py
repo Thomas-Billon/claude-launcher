@@ -3,8 +3,8 @@ Git worktrees where Claude Code works beside the main folder of a repo, without 
 
 Every worktree of a repo lives in ~/.claude-worktrees/<id>/<name>/, the id being generated
 once per repo (see worktrees_state.py), and works on its own temp/<name> branch created from
-a base branch of the repo. Once done, its commits are merged into that source branch, or its
-branch is renamed to be pushed by the user: the launcher itself never pushes anything.
+a branch of the repo, usually one of its base branches. Finishing or deleting a worktree is
+done outside the launcher, which never pushes anything.
 """
 
 import secrets
@@ -13,7 +13,7 @@ from pathlib import Path
 
 from launcher import worktrees_state
 from launcher.folder_menu import is_valid_folder_name
-from launcher.git_repo import count_commits, list_changed_files, run_git, succeeds
+from launcher.git_repo import run_git, succeeds
 from launcher.paths import WORKTREES_DIR
 
 TEMP_BRANCH_PREFIX = "temp/"
@@ -110,7 +110,7 @@ def create_worktree(repo, name, source_branch):
     )
 
     if is_remote:
-        # INFO: The commits are merged back into a local branch, which follows the remote one. A base branch saved
+        # INFO: The worktree starts from a local branch, which follows the remote one. A base branch saved
         # while it was only on the remote keeps its remote name, its local branch is reused once created
         local_branch = source_branch.split("/", 1)[-1]
 
@@ -137,11 +137,27 @@ def list_registered_paths(repo):
     return {Path(line.removeprefix("worktree ")).resolve() for line in lines if line.startswith("worktree ")}
 
 
+def remove_orphan_folders(repo_dir, registered_paths):
+    """Deletes the empty folders of the worktrees folder of the repo that git no longer knows, such as those left by a
+    worktree removed from a Claude Code session still running in it. A non-empty folder is never touched."""
+    if repo_dir is None or not repo_dir.is_dir():
+        return
+
+    for folder in repo_dir.iterdir():
+        if folder.is_dir() and folder.resolve() not in registered_paths and not any(folder.iterdir()):
+            try:
+                folder.rmdir()
+            except OSError:
+                # INFO: A process still running in the folder prevents its removal
+                pass
+
+
 def load_worktrees(repo):
     """Returns the worktrees of the repo sorted by name, after forgetting those git no longer knows."""
     succeeds(repo, "worktree", "prune")
     registered_paths = list_registered_paths(repo)
     repo_dir = find_repo_dir(repo)
+    remove_orphan_folders(repo_dir, registered_paths)
     worktrees = []
 
     for name, source_branch in worktrees_state.load_worktree_sources(repo).items():
@@ -153,68 +169,3 @@ def load_worktrees(repo):
             worktrees_state.forget_worktree(repo, name)
 
     return sorted(worktrees, key=lambda worktree: worktree.name.casefold())
-
-
-def list_worktree_changes(worktree):
-    return list_changed_files(worktree.path)
-
-
-def is_on_its_branch(worktree):
-    """Returns whether the worktree is still on its temp branch, the only one the launcher merges, keeps or deletes."""
-    return run_git(worktree.path, "symbolic-ref", "--quiet", "--short", "HEAD").stdout.strip() == worktree.branch
-
-
-def count_unmerged_commits(repo, worktree):
-    return count_commits(repo, f"{worktree.source_branch}..{worktree.branch}")
-
-
-def remove_worktree(repo, worktree):
-    """Removes the worktree, forgets it and deletes its temp branch. Returns False when its folder is left on disk."""
-    # INFO: Without --force, git refuses to remove a worktree holding uncommitted changes
-    succeeds(repo, "worktree", "remove", str(worktree.path))
-
-    # INFO: On Windows, a process running in the folder lets git delete its content and forget the worktree, but not
-    # delete the folder itself
-    if worktree.path.resolve() in list_registered_paths(repo):
-        return False
-
-    worktrees_state.forget_worktree(repo, worktree.name)
-
-    # INFO: -D since git -d only accepts a branch merged into the branch checked out in the main folder
-    if branch_exists(repo, worktree.branch):
-        succeeds(repo, "branch", "--quiet", "-D", worktree.branch)
-
-    return not worktree.path.exists()
-
-
-def merge_into_source(repo, worktree):
-    """Moves the commits of the worktree onto its source branch. Returns False when git refuses, leaving the main folder
-    and the worktree with all their changes."""
-    if not is_on_its_branch(worktree):
-        return False
-
-    if not succeeds(worktree.path, "rebase", "--quiet", worktree.source_branch):
-        run_git(worktree.path, "rebase", "--abort")
-
-        return False
-
-    current_branch = run_git(repo, "symbolic-ref", "--quiet", "--short", "HEAD").stdout.strip()
-
-    # INFO: A branch checked out in the main folder is merged there, so that its files follow. Git refuses when its
-    # uncommitted changes would be overwritten. Any other branch is moved without being checked out
-    if current_branch == worktree.source_branch:
-        return succeeds(repo, "merge", "--ff-only", "--quiet", worktree.branch)
-
-    return succeeds(repo, "fetch", "--quiet", ".", f"{worktree.branch}:{worktree.source_branch}")
-
-
-def keep_as_branch(repo, worktree, branch):
-    """Renames the branch of the worktree, to be pushed by the user."""
-    if not is_on_its_branch(worktree) or not is_valid_branch_name(repo, branch) or branch_exists(repo, branch):
-        return False
-
-    return succeeds(repo, "branch", "--quiet", "-m", worktree.branch, branch)
-
-
-def delete_worktree(repo, worktree):
-    return is_on_its_branch(worktree) and remove_worktree(repo, worktree)

@@ -103,7 +103,7 @@ def is_valid_folder_name(name):
 class FolderMenu:
     """State of the menu between two keys. Each key handler returns the outcome of the menu, or None to go on."""
 
-    def __init__(self, initial_dir, header_lines, account, is_launch, help_text, message=None):
+    def __init__(self, initial_dir, header_lines, account, is_launch, help_text, message=None, selected_path=None, session=NEW_SESSION):
         self.header_lines = header_lines
         self.account = account
         self.is_launch = is_launch
@@ -112,14 +112,14 @@ class FolderMenu:
         self.message = message
         self.notice = None
         self.recent_folders = get_recent_folders(launcher_state.load_history(account)) if is_launch else []
-        self.session_index = 0
+        self.session_index = SESSION_MODES.index(session)
         self.filter_text = ""
         self.current_dir = initial_dir
         self.subfolder_names = []
         self.selection = None
         self.has_subfolders = False
 
-        if not self.open(initial_dir):
+        if not self.open(initial_dir, selected_path):
             self.rebuild()
 
     @property
@@ -136,7 +136,7 @@ class FolderMenu:
 
         return lines
 
-    def open(self, directory, selected_path=None):
+    def open(self, directory, selected_path=None, highlights_subfolders=False):
         """Lists the subfolders of the directory, returns False when it cannot be read."""
         subfolder_names = get_subfolder_names(directory)
 
@@ -148,11 +148,11 @@ class FolderMenu:
         self.current_dir = directory
         self.subfolder_names = subfolder_names
         self.filter_text = ""
-        self.rebuild(selected_path)
+        self.rebuild(selected_path, highlights_subfolders)
 
         return True
 
-    def rebuild(self, selected_path=None):
+    def rebuild(self, selected_path=None, highlights_subfolders=False):
         def matches_filter(name):
             return self.filter_text.casefold() in name.casefold()
 
@@ -165,9 +165,12 @@ class FolderMenu:
             if selected_path is not None and item is not SEPARATOR and item.path == selected_path
         ]
 
+        # INFO: Skips the recent folders and their separator, landing on the first subfolder or on the new folder entry
+        default_index = len(recent) + 1 if highlights_subfolders and recent else 0
+
         self.has_subfolders = bool(subfolders)
         # INFO: A folder both recent and in the current directory is highlighted among the subfolders, listed last
-        self.selection = ListSelection(items, lambda entry: entry.label, matching_indexes[-1] if matching_indexes else 0)
+        self.selection = ListSelection(items, lambda entry: entry.label, matching_indexes[-1] if matching_indexes else default_index)
 
     def run(self):
         """Returns the selected folder, BACK on Esc or QUIT on Ctrl+C."""
@@ -206,7 +209,7 @@ class FolderMenu:
             # INFO: The folder just left stays highlighted in its parent
             self.open(self.current_dir.parent, self.current_dir)
         elif key == Key.RIGHT and selected is not NEW_FOLDER:
-            self.open(selected.path)
+            self.open(selected.path, highlights_subfolders=True)
         elif key == Key.ENTER and selected is NEW_FOLDER:
             self.create_folder()
         elif key == Key.ENTER:
@@ -261,8 +264,8 @@ def prompt_for_folder(initial_dir, header_lines, account, message=None):
     return FolderMenu(initial_dir, header_lines, account, False, DEFAULT_FOLDER_HELP_TEXT, message).run()
 
 
-def prompt_for_launch_folder(initial_dir, header_lines, account):
+def prompt_for_launch_folder(initial_dir, header_lines, account, selected_path=None, session=NEW_SESSION):
     """Returns the selected folder (or BACK on Esc, QUIT on Ctrl+C) and the chosen session mode."""
-    menu = FolderMenu(initial_dir, header_lines, account, True, FOLDER_HELP_TEXT)
+    menu = FolderMenu(initial_dir, header_lines, account, True, FOLDER_HELP_TEXT, selected_path=selected_path, session=session)
 
     return menu.run(), menu.session

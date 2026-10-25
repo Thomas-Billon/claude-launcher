@@ -11,6 +11,9 @@ CONFIG_FILE = LAUNCHER_REPO / "config.json"
 ACCOUNTS_DIR = Path.home() / ".claude-accounts"
 STATE_FILE = ACCOUNTS_DIR / "launcher_state.json"
 
+WORKTREES_DIR = Path.home() / ".claude-worktrees"
+WORKTREES_STATE_FILE = WORKTREES_DIR / "worktrees_state.json"
+
 # INFO: Shared base of all accounts, which no account logs into
 SHARED_CONFIG_DIR = Path.home() / ".claude"
 SHARED_SETTINGS_FILE = SHARED_CONFIG_DIR / "settings.json"

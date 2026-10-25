@@ -8,8 +8,10 @@ Steps, each one adding its line to the header (modules in the launcher folder):
 2. Account (account_menu.py). Claude Code asks for the login of a logged out
    account itself, after which an account already in the list is reported.
 3. Folder (folder_menu.py) where `claude` is launched, and session mode.
+4. Worktree (worktree_menu.py), only when the folder is in a git repo: its main
+   folder, or a worktree where `claude` is launched instead.
 
-The -a argument skips the account menu, and the folder menu too along with -d.
+The -a argument skips the account menu, and the folder and worktree menus too along with -d.
 Otherwise the folder list starts from the -d argument, else from the default
 folder of the account (launcher_state.py), else from the user's home directory.
 Arguments after -- are passed to Claude Code.
@@ -23,9 +25,10 @@ import sys
 from collections import namedtuple
 from pathlib import Path
 
-from launcher import accounts, launcher_state, repo_sync
+from launcher import accounts, launcher_state, repo_sync, worktrees
 from launcher.account_menu import prompt_for_account
 from launcher.folder_menu import NEW_SESSION, get_start_dir, prompt_for_launch_folder, session_header_line
+from launcher.worktree_menu import NO_WORKTREE, prompt_for_worktree, worktree_header_line
 from launcher.terminal_ui import (
     BACK,
     CYAN,
@@ -138,8 +141,8 @@ def restart(header_lines):
 
 
 def run_menus(argument_dir, argument_account, header_lines):
-    """Runs the menus, each one adding its line to the header. Returns the chosen account, folder and session mode,
-    or None values on Ctrl+C."""
+    """Runs the menus, each one adding its line to the header. Returns the chosen account, folder, session mode and
+    worktree (None for the folder itself), or None values on Ctrl+C."""
     account = argument_account
     # INFO: -a only skips the account menu once, Esc in the folder menu still goes back to it
     is_account_chosen = account is not None
@@ -150,38 +153,57 @@ def run_menus(argument_dir, argument_account, header_lines):
             account = prompt_for_account(header_lines, account.account_id if account else None)
 
             if account is QUIT:
-                return None, None, None
+                return None, None, None, None
 
         is_account_chosen = False
         start_dir = argument_dir or get_start_dir(account)
         selected_path, session = prompt_for_launch_folder(start_dir, header_lines, account)
 
-        if selected_path is QUIT:
-            return None, None, None
+        while selected_path is not QUIT and selected_path is not BACK:
+            repo = worktrees.find_repo_root(selected_path)
 
-        if selected_path is not BACK:
-            return account, selected_path, session
+            if repo is None:
+                return account, selected_path, session, None
+
+            worktree, session = prompt_for_worktree(repo, selected_path, header_lines, account, session)
+
+            if worktree is QUIT:
+                return None, None, None, None
+
+            if worktree is not BACK:
+                return account, selected_path, session, None if worktree is NO_WORKTREE else worktree
+
+            # INFO: Coming back from the worktree list keeps the folder that was just chosen highlighted
+            selected_path, session = prompt_for_launch_folder(selected_path.parent, header_lines, account, selected_path, session)
+
+        if selected_path is QUIT:
+            return None, None, None, None
 
 
 def pick_launch_target(argument_dir, argument_account, header_lines):
-    """Returns the account, folder and session mode to launch, chosen without any menu with both -a and -d."""
+    """Returns the account, folder, session mode and worktree to launch, chosen without any menu with both -a and -d."""
     if argument_account is not None and argument_dir is not None:
-        account, folder, session = argument_account, argument_dir, NEW_SESSION
+        account, folder, session, worktree = argument_account, argument_dir, NEW_SESSION, None
     else:
-        account, folder, session = run_menus(argument_dir, argument_account, header_lines)
+        account, folder, session, worktree = run_menus(argument_dir, argument_account, header_lines)
 
         if account is None:
-            return None, None, None
+            return None, None, None, None
 
+    # INFO: The chosen folder is recorded even when launching in one of its worktrees, so that recent folders never
+    # list a worktree
     launcher_state.record_launch(account, folder)
     lines = [*header_lines, accounts.account_header_line(account), HeaderLine("Directory", folder, GREEN)]
+
+    if worktree is not None:
+        lines.append(worktree_header_line(worktree, GREEN))
 
     if session is not NEW_SESSION:
         lines.append(session_header_line(session, GREEN))
 
     render_screen(lines)
 
-    return account, folder, session
+    return account, folder, session, worktree
 
 
 def cancel():
@@ -191,7 +213,7 @@ def cancel():
     return 0
 
 
-def launch_claude_code(account, folder, claude_arguments):
+def launch_claude_code(account, folder, worktree, claude_arguments):
     """Returns the exit code of Claude Code."""
     failed_links = accounts.prepare_account_dir(account.config_dir)
 
@@ -202,8 +224,9 @@ def launch_claude_code(account, folder, claude_arguments):
     print()
 
     # INFO: A drive root has no name
-    set_title(f"Claude Code · {account.display_name} · {folder.name or folder}")
-    os.chdir(folder)
+    title = f"Claude Code · {account.display_name} · {folder.name or folder}"
+    set_title(f"{title} · {worktree.name}" if worktree is not None else title)
+    os.chdir(worktree.path if worktree is not None else folder)
 
     return subprocess.run(accounts.build_launch_command(claude_arguments), env=accounts.build_environment(account)).returncode
 
@@ -246,17 +269,17 @@ def main():
         if sync_result.needs_restart:
             return restart(sync_result.header_lines)
 
-        account, folder, session = pick_launch_target(argument_dir, argument_account, sync_result.header_lines)
+        account, folder, session, worktree = pick_launch_target(argument_dir, argument_account, sync_result.header_lines)
     except KeyboardInterrupt:
         # INFO: Raised by Ctrl+C in a question of the repo syncs or of the account menu
-        account, folder, session = None, None, None
+        account, folder, session, worktree = None, None, None, None
     finally:
         show_cursor()
 
     if account is None:
         return cancel()
 
-    exit_code = launch_claude_code(account, folder, [*session.claude_arguments, *arguments.claude_arguments])
+    exit_code = launch_claude_code(account, folder, worktree, [*session.claude_arguments, *arguments.claude_arguments])
     report_duplicate(account)
 
     return exit_code

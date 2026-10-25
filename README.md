@@ -5,6 +5,7 @@ Launcher interactif pour **Claude Code** : choix du **compte**, puis du **projet
 - 🕘 Les **5 derniers dossiers** ouverts avec le compte en tête de liste
 - 📁 Puis les **sous-dossiers** du dossier par défaut, par ordre alphabétique, filtrables en tapant
 - 💬 Nouvelle conversation, **reprise de la dernière** ou d'une conversation au choix
+- 🌳 **Worktrees git** : plusieurs sessions sur un même repo, chacune sur sa branche `temp/`, sans toucher au dossier principal
 - 🪟 Titre de fenêtre `Claude Code · <compte> · <projet>`
 - 🔄 **Synchro git** du launcher et du repo de skills partagés au démarrage
 
@@ -64,7 +65,7 @@ Avec un repo de skills, `~/.claude/CLAUDE.md` devient un **relais** qui importe 
 
 - 🗑️ Supprime le raccourci, le profil Windows Terminal et `config.json` (après confirmation)
 - 👤 Pour chaque compte (`Y/N`) : `claude auth logout` puis suppression du dossier (jonctions retirées d'abord)
-- 🛡️ **Jamais touchés** : `~/.claude` et les repos clonés
+- 🛡️ **Jamais touchés** : `~/.claude`, `~/.claude-worktrees` (peut contenir du travail non fusionné) et les repos clonés
 
 ## Utilisation
 
@@ -79,7 +80,7 @@ python claude_launcher.py -a Perso -- --model opus     # arguments après -- pas
 ```
 
 - `-a` : nom, adresse ou id du compte, sans tenir compte de la casse. `Échap` dans le choix du dossier revient quand même au choix du compte
-- Lancement direct : synchro des repos faite, dossier ajouté à l'historique
+- Lancement direct : synchro des repos faite, dossier ajouté à l'historique, sans worktree
 
 ### Windows Terminal
 
@@ -114,7 +115,7 @@ Liste : les **5 dossiers récents** (`nom  (dossier parent)`), une ligne vide, l
 | Lettres | **Filtrer** récents et sous-dossiers par nom (affiché `[filter: …]`) |
 | `Retour arrière` | Effacer le dernier caractère du filtre |
 | `Tab` | Changer de [session](#session) |
-| `Entrée` | **Lancer Claude Code** (ou créer un dossier sur `+ New folder`) |
+| `Entrée` | **Lancer Claude Code**, après le [choix du worktree](#choix-du-worktree) dans un repo git (ou créer un dossier sur `+ New folder`) |
 | `Échap` | Vider le filtre, sinon revenir au choix du compte |
 | `Ctrl+C` | Quitter |
 
@@ -130,6 +131,38 @@ Ligne `Session` de l'en-tête, `Tab` passe à la suivante :
 | `new conversation` | `claude` |
 | `continue the last conversation` | `claude --continue` |
 | `resume a conversation, picked in Claude Code` | `claude --resume` |
+
+### Choix du worktree
+
+Étape affichée après le choix du dossier, **seulement s'il est dans un repo git**. Liste : `+ Worktree`, `No worktree` (sélectionné par défaut : lance dans le dossier choisi, comme avant), une ligne vide, puis les worktrees du repo (`nom  from <branche source>`).
+
+| Touche | Action |
+|--------|--------|
+| `↑` `↓` | Sélectionner une ligne |
+| `→` | Ouvrir les options de la ligne |
+| `←` `Échap` | Fermer les options |
+| `Tab` | Changer de [session](#session) |
+| `Entrée` | **Lancer Claude Code** dans le dossier ou le worktree (ou créer un worktree sur `+ Worktree`) |
+| `Échap` | Revenir au choix du dossier (le dossier reste sélectionné) |
+| `Ctrl+C` | Quitter |
+
+- 🌳 `+ Worktree` : nom du worktree, puis branche de départ parmi les **branches de départ** du repo (choix sauté s'il n'y en a qu'une), puis lancement de Claude Code dans `~/.claude-worktrees/<id>/<nom>/`, sur une nouvelle branche `temp/<nom>`
+- 🌿 **Branches de départ** : choisies au premier `+ Worktree` du repo, parmi ses branches locales puis distantes (`Espace` coche, `Entrée` enregistre, `Échap` annule). Une branche distante choisie crée la branche locale qui la suit
+- 🧹 Worktrees dont le dossier a été supprimé à la main : retirés à l'ouverture de l'étape (`git worktree prune`), leur branche `temp/` est gardée
+- 🪟 Titre de l'onglet : `Claude Code · <compte> · <projet> · <worktree>`. L'historique garde le dossier choisi, jamais le chemin d'un worktree
+
+| Option | Sur | Effet |
+|--------|-----|-------|
+| `Edit base branches` | `+ Worktree` | Modifie les branches de départ du repo |
+| `Finish worktree` → `Merge into <source>` | Un worktree | Rebase de `temp/<nom>` sur sa branche source, fusion en fast-forward, puis suppression du worktree et de `temp/<nom>` |
+| `Finish worktree` → `Keep as branch` | Un worktree | Renomme `temp/<nom>` (ex. `fix/long-fix`), gardée en local pour un push et une PR faits à la main, puis supprime le worktree |
+| `Delete worktree` | Un worktree | Supprime le worktree et `temp/<nom>` (après confirmation, avec le nombre de commits non fusionnés) |
+
+> [!IMPORTANT]
+> - Le launcher ne **pousse jamais** rien : les branches `temp/` restent locales, la branche source est poussée à la main une fois le travail validé.
+> - `Finish worktree` et `Delete worktree` sont **refusés** tant que le worktree a des changements non commités (fichiers listés), ou qu'il n'est plus sur sa branche `temp/<nom>` (ses commits ailleurs seraient perdus).
+> - Dossier du worktree impossible à supprimer (Claude Code encore lancé dedans) : la fusion ou le renommage restent faits, un message en jaune le signale.
+> - Fusion dans une branche sortie dans le dossier principal : faite dans ce dossier, **refusée par git** si ses changements en cours touchent les mêmes fichiers. Conflit de rebase : tout est annulé, rien n'est perdu.
 
 ## Comptes
 
@@ -222,9 +255,14 @@ Sans repo : étape ignorée. Pour activer, changer ou désactiver : relancer `./
 | `launcher/launcher_state.py` | `launcher_state.json` : nom, dossier par défaut, historique |
 | `launcher/account_menu.py` | Menu des comptes, options et historique |
 | `launcher/folder_menu.py` | Choix du dossier : filtre, nouveau dossier, session |
+| `launcher/worktree_menu.py` | Choix du worktree : options, branches de départ, choix de la branche |
+| `launcher/worktrees.py` | Worktrees : création, liste, fusion, suppression (commandes git) |
+| `launcher/worktrees_state.py` | `worktrees_state.json` : id, branches de départ et branche source des worktrees, par repo |
+| `launcher/json_store.py` | Lecture et écriture atomique des fichiers JSON d'état |
 | `launcher/prompts.py` | Questions `Y/N`, messages de commit, noms de compte et de dossier |
 | `launcher/keyboard.py` | Lecture du clavier |
 | `launcher/terminal_ui.py` | Rendu console : en-tête, listes, messages |
+| `tests/` | Tests des worktrees sur de vrais repos temporaires : `python -m unittest discover -s tests -v` |
 
 ## Fichiers locaux
 
@@ -234,3 +272,10 @@ Non versionnés (`.gitignore`), propres à chaque machine :
 |---------|------|
 | `*.lnk` | Raccourcis générés par `install.ps1` |
 | `config.json` | Chemin du repo de skills (`skills_repo`, `null` si désactivé) |
+
+Hors du repo, dans le dossier utilisateur :
+
+| Dossier | Rôle |
+|---------|------|
+| `~/.claude-accounts/` | Comptes et `launcher_state.json` |
+| `~/.claude-worktrees/` | Worktrees (`<id>/<nom>/`, un id par repo) et `worktrees_state.json` |

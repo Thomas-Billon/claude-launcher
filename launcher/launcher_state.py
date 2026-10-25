@@ -5,12 +5,10 @@ its name, its default folder, and the last launch time of the folders recently o
 Accounts are keyed by their id, the name of their directory (see accounts.py).
 """
 
-import json
-import os
-import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
+from launcher.json_store import load_json, save_json
 from launcher.paths import STATE_FILE
 
 # INFO: Also the number of recent folders listed on top of the folder menu
@@ -18,22 +16,11 @@ HISTORY_SIZE = 5
 
 
 def load_state():
-    try:
-        with STATE_FILE.open("r", encoding="utf-8") as state_file:
-            return json.load(state_file)
-    except (json.JSONDecodeError, OSError):
-        return {}
+    return load_json(STATE_FILE)
 
 
 def save_state(state):
-    STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
-
-    # INFO: Written aside then swapped in, so that a launcher running in parallel never reads a half-written file,
-    # which it would load as empty and save back, losing every account name, default folder and history
-    with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=STATE_FILE.parent, suffix=".tmp", delete=False) as temp_file:
-        json.dump(state, temp_file, indent=2)
-
-    os.replace(temp_file.name, STATE_FILE)
+    save_json(STATE_FILE, state)
 
 
 def get_account_state(state, account):

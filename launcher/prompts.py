@@ -1,5 +1,5 @@
 """
-Text questions asked under the launcher header: Y/N questions, commit messages, account and folder names.
+Text questions asked under the launcher header: Y/N questions, commit messages, account, folder, worktree and branch names.
 
 The answer is typed on an input line: Left/Right, Home/End to move, Backspace/Delete
 to erase, Enter to confirm. Esc cancels when the question allows it, and Ctrl+C
@@ -137,3 +137,11 @@ def ask_account_name(header_lines, current_name=""):
 
 def ask_folder_name(header_lines, initial_name=""):
     return ask_required_text(header_lines, "New folder name", initial_name)
+
+
+def ask_worktree_name(header_lines):
+    return ask_required_text(header_lines, "Worktree name, e.g. export-pdf")
+
+
+def ask_branch_name(header_lines):
+    return ask_required_text(header_lines, "Branch name, e.g. fix/long-fix")

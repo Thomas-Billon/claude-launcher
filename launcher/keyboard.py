@@ -22,6 +22,7 @@ class Key:
     DELETE = "\x00S"
     BACKSPACE = "\x08"
     TAB = "\t"
+    SPACE = " "
     ENTER = "\r"
     ESC = "\x1b"
     CTRL_C = "\x03"

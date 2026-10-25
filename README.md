@@ -2,7 +2,7 @@
 
 Launcher interactif pour **Claude Code** : choix du **compte**, puis du **projet**, puis lancement de `claude` dans le dossier choisi.
 
-- 🕘 Les **5 derniers dossiers** ouverts avec le compte en tête de liste
+- ⭐ Les **dossiers favoris** du compte en tête de liste (`Ctrl+F` pour en ajouter ou en retirer)
 - 📁 Puis les **sous-dossiers** du dossier par défaut, par ordre alphabétique, filtrables en tapant
 - 💬 Nouvelle conversation, **reprise de la dernière** ou d'une conversation au choix
 - 🌳 **Worktrees git** : plusieurs sessions sur un même repo, chacune sur sa branche `temp/`, sans toucher au dossier principal
@@ -80,7 +80,7 @@ python claude_launcher.py -a Perso -- --model opus     # arguments après -- pas
 ```
 
 - `-a` : nom, adresse ou id du compte, sans tenir compte de la casse. `Échap` dans le choix du dossier revient quand même au choix du compte
-- Lancement direct : synchro des repos faite, dossier ajouté à l'historique, sans worktree
+- Lancement direct : synchro des repos faite, sans worktree
 
 ### Windows Terminal
 
@@ -105,20 +105,23 @@ Le raccourci lance `wt -w claude-launcher new-tab -p "Claude Code"` (nouvel ongl
 
 ### Choix du dossier
 
-Liste : les **5 dossiers récents** (`nom  (dossier parent)`), une ligne vide, les **sous-dossiers** du dossier courant par ordre alphabétique, puis `+ New folder`. Dossier inaccessible : message `Access denied`, on reste sur place.
+Liste : le titre `★ Favorites` et les **favoris** du compte (`nom  (dossier parent)`, triés par nom), une ligne vide, le titre `Subfolders` et les **sous-dossiers** du dossier courant par ordre alphabétique, puis `+ New folder`. Les titres et la ligne vide ne sont jamais sélectionnables. Sans favori (ou sans favori correspondant au filtre), le titre `★ Favorites`, les favoris et la ligne vide sont masqués. Dossier inaccessible : message `Access denied`, on reste sur place.
 
 | Touche | Action |
 |--------|--------|
 | `↑` `↓` | Sélectionner un dossier |
 | `→` | Entrer dans le dossier |
 | `←` | Remonter au dossier parent (le dossier quitté reste sélectionné) |
-| Lettres | **Filtrer** récents et sous-dossiers par nom (affiché `[filter: …]`) |
+| Lettres | **Filtrer** favoris et sous-dossiers par nom (affiché `[filter: …]`) |
 | `Retour arrière` | Effacer le dernier caractère du filtre |
+| `Ctrl+F` | Ajouter ou retirer le dossier sélectionné des **favoris** du compte (ignoré sur `+ New folder`) |
 | `Tab` | Changer de [session](#session) |
 | `Entrée` | **Lancer Claude Code**, après le [choix du worktree](#choix-du-worktree) dans un repo git (ou créer un dossier sur `+ New folder`) |
 | `Échap` | Vider le filtre, sinon revenir au choix du compte |
 | `Ctrl+C` | Quitter |
 
+- ⭐ **Favoris** : propres à chaque compte, sans limite, enregistrés aussitôt. Un favori aussi présent dans les sous-dossiers du dossier courant est listé dans les deux sections. Après `Ctrl+F` sur un sous-dossier, il reste sélectionné ; après avoir retiré un favori, la sélection passe au favori suivant (sinon au précédent, sinon au premier sous-dossier). Pas de favoris dans le choix du dossier par défaut
+- ❓ Un favori dont le dossier n'existe plus reste listé avec `(missing)` en gris : `Entrée` affiche `Folder not found.` sans lancer, `Ctrl+F` le retire. Il n'est jamais retiré automatiquement
 - 📁 `+ New folder` : demande un nom (pré-rempli avec le filtre), crée le dossier dans le dossier courant puis le sélectionne
 - 🪟 Titre de l'onglet : `Claude Code · <compte> · <projet>` au lancement, puis Claude Code le remplace par `✳ <sujet>`, animé pendant le traitement
 
@@ -149,7 +152,7 @@ Ligne `Session` de l'en-tête, `Tab` passe à la suivante :
 - 🌳 `+ Worktree` : nom du worktree, puis branche de départ parmi les **branches de départ** du repo (choix sauté s'il n'y en a qu'une), puis lancement de Claude Code dans `~/.claude-worktrees/<id>/<nom>/`, sur une nouvelle branche `temp/<nom>`
 - 🌿 **Branches de départ** : choisies au premier `+ Worktree` du repo, parmi ses branches locales puis distantes (`Espace` coche, `Entrée` enregistre, `Échap` annule). Une branche distante choisie crée la branche locale qui la suit
 - 🧹 À l'ouverture de l'étape : les worktrees dont le dossier a été supprimé sont retirés (`git worktree prune`, leur branche `temp/` est gardée), et les dossiers vides restés dans `~/.claude-worktrees/<id>/` (worktree supprimé pendant que Claude Code tournait dedans) sont supprimés. Un dossier non vide n'est jamais touché
-- 🪟 Titre de l'onglet : `Claude Code · <compte> · <projet> · <worktree>`. L'historique garde le dossier choisi, jamais le chemin d'un worktree
+- 🪟 Titre de l'onglet : `Claude Code · <compte> · <projet> · <worktree>`
 
 | Option | Sur | Effet |
 |--------|-----|-------|
@@ -183,11 +186,8 @@ Nom et adresse mail (en gris) affichés pour chaque compte, triés par ordre alp
 | `Use account` | Passe au choix du dossier |
 | `Rename account` | Modifie le nom |
 | `Set default folder` | Choisit le dossier de départ du compte (`Entrée` enregistre, `Échap` annule) |
-| `Remove from history` | Liste l'historique, du plus récent au plus ancien : `Entrée` retire le dossier |
-| `Clear history` | Vide l'historique du compte (après confirmation) |
-| `Delete account` | Déconnecte, retire les jonctions et supprime dossier, réglages et historique (après confirmation) |
+| `Delete account` | Déconnecte, retire les jonctions et supprime dossier, réglages et favoris (après confirmation) |
 
-- 🕘 **Historique** : date du dernier lancement des dossiers, par compte. Seuls les 5 plus récents encore existants sont gardés, ceux affichés en dossiers récents.
 - ⚠️ **Doublon** : avertissement à la fermeture si un autre compte utilise la même adresse.
 - 🏷️ Un compte sans nom (antérieur aux noms) affiche son adresse.
 
@@ -247,8 +247,8 @@ Sans repo : étape ignorée. Pour activer, changer ou désactiver : relancer `./
 | `launcher/repo_sync.py` | Synchro des repos au démarrage |
 | `launcher/git_repo.py` | Commandes git (fetch, pull, merge, commit, push) |
 | `launcher/accounts.py` | Comptes : dossiers, jonctions, commande de lancement |
-| `launcher/launcher_state.py` | `launcher_state.json` : nom, dossier par défaut, historique |
-| `launcher/account_menu.py` | Menu des comptes, options et historique |
+| `launcher/launcher_state.py` | `launcher_state.json` : nom, dossier par défaut, favoris |
+| `launcher/account_menu.py` | Menu des comptes et options |
 | `launcher/folder_menu.py` | Choix du dossier : filtre, nouveau dossier, session |
 | `launcher/worktree_menu.py` | Choix du worktree : options, branches de départ, choix de la branche |
 | `launcher/worktrees.py` | Worktrees : création, liste, nettoyage des dossiers vides (commandes git) |

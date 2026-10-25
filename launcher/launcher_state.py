@@ -1,18 +1,15 @@
 """
 State the launcher keeps per account in ~/.claude-accounts/launcher_state.json:
-its name, its default folder, and the last launch time of the folders recently opened with it.
+its name, its default folder and its favorite folders.
 
 Accounts are keyed by their id, the name of their directory (see accounts.py).
 """
 
-from datetime import datetime, timezone
+import os
 from pathlib import Path
 
 from launcher.json_store import load_json, save_json
 from launcher.paths import STATE_FILE
-
-# INFO: Also the number of recent folders listed on top of the folder menu
-HISTORY_SIZE = 5
 
 
 def load_state():
@@ -50,37 +47,28 @@ def save_default_dir(account, default_dir):
     save_state(state)
 
 
-def load_history(account):
-    """Returns the last launch time of each folder opened with this account, keyed by absolute path."""
-    return get_account_state(load_state(), account).get("history", {})
+def load_favorites(account):
+    """Returns the favorite folders of the account, sorted by folder name then full path."""
+    favorites = get_account_state(load_state(), account).get("favorites", [])
+
+    return sorted((Path(folder) for folder in favorites), key=lambda folder: (folder.name.casefold(), str(folder).casefold()))
 
 
-def prune_history(history):
-    """Returns the most recently launched folders that still exist, latest first, at most HISTORY_SIZE."""
-    launched = sorted(history, key=history.get, reverse=True)
-    kept = [folder for folder in launched if Path(folder).is_dir()][:HISTORY_SIZE]
-
-    return {folder: history[folder] for folder in kept}
-
-
-def record_launch(account, folder):
+def toggle_favorite(account, folder):
+    """Adds the folder to the favorites of the account or removes it, returns True when it is now a favorite."""
     state = load_state()
     account_state = get_account_state(state, account)
-    history = {**account_state.get("history", {}), str(folder): datetime.now(timezone.utc).isoformat()}
-    account_state["history"] = prune_history(history)
+    favorites = account_state.get("favorites", [])
+    remaining = [favorite for favorite in favorites if os.path.normcase(favorite) != os.path.normcase(folder)]
+    is_favorite = len(remaining) == len(favorites)
+
+    if is_favorite:
+        remaining.append(str(folder))
+
+    account_state["favorites"] = remaining
     save_state(state)
 
-
-def remove_from_history(account, folder):
-    state = load_state()
-    get_account_state(state, account).get("history", {}).pop(str(folder), None)
-    save_state(state)
-
-
-def clear_history(account):
-    state = load_state()
-    get_account_state(state, account).pop("history", None)
-    save_state(state)
+    return is_favorite
 
 
 def forget_account(account):

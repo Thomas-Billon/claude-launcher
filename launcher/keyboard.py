@@ -26,6 +26,7 @@ class Key:
     ENTER = "\r"
     ESC = "\x1b"
     CTRL_C = "\x03"
+    CTRL_F = "\x06"
 
 
 def read_key():

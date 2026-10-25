@@ -8,6 +8,7 @@ import re
 import shutil
 import sys
 from collections import namedtuple
+from dataclasses import dataclass
 
 from launcher.keyboard import Key
 
@@ -38,6 +39,13 @@ QUIT = object()
 
 HeaderLine = namedtuple("HeaderLine", "label value color")
 Message = namedtuple("Message", "text color")
+
+
+@dataclass(frozen=True)
+class SectionTitle:
+    """List item rendered as a gray title and skipped by Up/Down, above a group of items."""
+
+    label: str
 
 
 def colorize(text, color):
@@ -164,7 +172,7 @@ class ListSelection:
         self.label = label
         # INFO: Optional text shown in gray after the label of each item
         self.secondary_label = secondary_label
-        self.selectable_indexes = [index for index, item in enumerate(items) if item is not SEPARATOR]
+        self.selectable_indexes = [index for index, item in enumerate(items) if item is not SEPARATOR and not isinstance(item, SectionTitle)]
         self.selected_index = selected_index if selected_index in self.selectable_indexes else self._first_selectable()
         self.scroll_offset = 0
 
@@ -203,6 +211,11 @@ class ListSelection:
         for index in range(self.scroll_offset, self.scroll_offset + visible_rows):
             if self.items[index] is SEPARATOR:
                 lines.append("")
+
+                continue
+
+            if isinstance(self.items[index], SectionTitle):
+                lines.append(colorize(truncate(f"    {self.items[index].label}", max_length), DARK_GRAY))
 
                 continue
 

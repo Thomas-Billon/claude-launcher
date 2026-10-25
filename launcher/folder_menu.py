@@ -6,9 +6,10 @@ move to the parent/child folder). Typed characters filter the list by folder nam
 Backspace erases them and Esc clears the filter. A last entry creates a new folder
 in the current directory.
 
-To launch Claude Code, the most recently opened folders of the account (see
-launcher_state.py) are listed on top, and Tab cycles the session mode: a new
-conversation, the last one continued, or one picked in Claude Code to resume.
+To launch Claude Code, the favorite folders of the account (see launcher_state.py)
+are listed on top, Ctrl+F toggles the highlighted folder as a favorite, and Tab
+cycles the session mode: a new conversation, the last one continued, or one picked
+in Claude Code to resume.
 """
 
 import os
@@ -31,15 +32,18 @@ from launcher.terminal_ui import (
     HeaderLine,
     ListSelection,
     Message,
+    SectionTitle,
     colorize,
     render_screen,
     truncate,
 )
 
-FOLDER_HELP_TEXT = "  Up/Down: Highlight   Left/Right: Navigate   Type: Filter   Tab: Session   Enter: Launch   Esc: Back   Ctrl+C: Quit"
+FOLDER_HELP_TEXT = "  Up/Down: Highlight   Left/Right: Navigate   Type: Filter   Ctrl+F: Favorite   Tab: Session   Enter: Launch   Esc: Back   Ctrl+C: Quit"
 DEFAULT_FOLDER_HELP_TEXT = "  Up/Down: Highlight   Left/Right: Navigate   Type: Filter   Enter: Set as default   Esc: Back   Ctrl+C: Quit"
 
 ACCESS_DENIED_MESSAGE = Message("Access denied to this folder.", RED)
+FOLDER_NOT_FOUND_MESSAGE = Message("Folder not found.", RED)
+MISSING_LABEL = "(missing)"
 INVALID_NAME_CHARACTERS = '<>:"/\\|?*'
 
 
@@ -47,6 +51,7 @@ INVALID_NAME_CHARACTERS = '<>:"/\\|?*'
 class FolderEntry:
     path: Path
     label: str
+    is_missing: bool = False
 
 
 @dataclass(frozen=True)
@@ -56,6 +61,8 @@ class SessionMode:
 
 
 NEW_FOLDER = FolderEntry(None, "+ New folder")
+FAVORITES_TITLE = SectionTitle("★ Favorites")
+SUBFOLDERS_TITLE = SectionTitle("Subfolders")
 
 SESSION_MODES = (
     SessionMode("new conversation", ()),
@@ -91,10 +98,6 @@ def get_subfolder_names(directory):
     return sorted(names, key=str.casefold)
 
 
-def get_recent_folders(history):
-    return [Path(folder) for folder in launcher_state.prune_history(history)]
-
-
 def is_valid_folder_name(name):
     # INFO: Windows silently drops a trailing dot, the created folder would not have the typed name
     return not name.endswith(".") and not any(character in INVALID_NAME_CHARACTERS for character in name)
@@ -111,7 +114,7 @@ class FolderMenu:
         # INFO: Shown until the menu closes, unlike the notice which only lasts until the next key
         self.message = message
         self.notice = None
-        self.recent_folders = get_recent_folders(launcher_state.load_history(account)) if is_launch else []
+        self.favorite_folders = launcher_state.load_favorites(account) if is_launch else []
         self.session_index = SESSION_MODES.index(session)
         self.filter_text = ""
         self.current_dir = initial_dir
@@ -156,21 +159,30 @@ class FolderMenu:
         def matches_filter(name):
             return self.filter_text.casefold() in name.casefold()
 
-        recent = [FolderEntry(folder, format_folder_label(folder)) for folder in self.recent_folders if matches_filter(folder.name)]
+        favorites = [
+            FolderEntry(folder, format_folder_label(folder), not folder.is_dir())
+            for folder in self.favorite_folders
+            if matches_filter(folder.name)
+        ]
         subfolders = [FolderEntry(self.current_dir / name, name) for name in self.subfolder_names if matches_filter(name)]
-        items = (recent + [SEPARATOR] if recent else []) + subfolders + [NEW_FOLDER]
+        favorites_section = [FAVORITES_TITLE, *favorites, SEPARATOR] if favorites else []
+        items = [*favorites_section, SUBFOLDERS_TITLE, *subfolders, NEW_FOLDER]
         matching_indexes = [
             index
             for index, item in enumerate(items)
-            if selected_path is not None and item is not SEPARATOR and item.path == selected_path
+            if selected_path is not None and isinstance(item, FolderEntry) and item.path == selected_path
         ]
 
-        # INFO: Skips the recent folders and their separator, landing on the first subfolder or on the new folder entry
-        default_index = len(recent) + 1 if highlights_subfolders and recent else 0
+        default_index = items.index(SUBFOLDERS_TITLE) + 1 if highlights_subfolders else 0
 
         self.has_subfolders = bool(subfolders)
-        # INFO: A folder both recent and in the current directory is highlighted among the subfolders, listed last
-        self.selection = ListSelection(items, lambda entry: entry.label, matching_indexes[-1] if matching_indexes else default_index)
+        # INFO: A folder both favorite and in the current directory is highlighted among the subfolders, listed last
+        self.selection = ListSelection(
+            items,
+            lambda entry: entry.label,
+            matching_indexes[-1] if matching_indexes else default_index,
+            lambda entry: MISSING_LABEL if entry.is_missing else None,
+        )
 
     def run(self):
         """Returns the selected folder, BACK on Esc or QUIT on Ctrl+C."""
@@ -212,8 +224,12 @@ class FolderMenu:
             self.open(selected.path, highlights_subfolders=True)
         elif key == Key.ENTER and selected is NEW_FOLDER:
             self.create_folder()
+        elif key == Key.ENTER and selected.is_missing:
+            self.notice = FOLDER_NOT_FOUND_MESSAGE
         elif key == Key.ENTER:
             return selected.path
+        elif key == Key.CTRL_F and self.is_launch and selected is not NEW_FOLDER:
+            self.toggle_favorite(selected.path)
         elif key == Key.TAB and self.is_launch:
             self.session_index = (self.session_index + 1) % len(SESSION_MODES)
         elif key == Key.BACKSPACE and self.filter_text:
@@ -226,6 +242,35 @@ class FolderMenu:
             self.set_filter(self.filter_text + key)
 
         return None
+
+    def toggle_favorite(self, folder):
+        favorite_indexes = self.get_favorite_indexes()
+        was_favorite_highlighted = self.selection.selected_index in favorite_indexes
+        favorite_position = favorite_indexes.index(self.selection.selected_index) if was_favorite_highlighted else None
+
+        is_favorite = launcher_state.toggle_favorite(self.account, folder)
+        self.favorite_folders = launcher_state.load_favorites(self.account)
+        self.rebuild(folder)
+        self.notice = Message(f"Added {folder} to favorites." if is_favorite else f"Removed {folder} from favorites.", GREEN)
+
+        if was_favorite_highlighted and not is_favorite:
+            self.highlight_after_unfavorite(favorite_position)
+
+    def highlight_after_unfavorite(self, favorite_position):
+        """Highlights the favorite that took the place of the removed one, else the previous one, else the first subfolder entry."""
+        favorite_indexes = self.get_favorite_indexes()
+
+        if favorite_indexes:
+            self.selection.selected_index = favorite_indexes[min(favorite_position, len(favorite_indexes) - 1)]
+        else:
+            self.selection.selected_index = self.selection.items.index(SUBFOLDERS_TITLE) + 1
+
+    def get_favorite_indexes(self):
+        """Returns the indexes of the favorite entries, listed before the subfolders title."""
+        items = self.selection.items
+        subfolders_title_index = items.index(SUBFOLDERS_TITLE)
+
+        return [index for index, item in enumerate(items[:subfolders_title_index]) if isinstance(item, FolderEntry)]
 
     def set_filter(self, filter_text):
         self.filter_text = filter_text

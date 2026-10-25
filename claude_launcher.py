@@ -190,9 +190,6 @@ def pick_launch_target(argument_dir, argument_account, header_lines):
         if account is None:
             return None, None, None, None
 
-    # INFO: The chosen folder is recorded even when launching in one of its worktrees, so that recent folders never
-    # list a worktree
-    launcher_state.record_launch(account, folder)
     lines = [*header_lines, accounts.account_header_line(account), HeaderLine("Directory", folder, GREEN)]
 
     if worktree is not None:

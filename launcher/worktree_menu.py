@@ -1,26 +1,22 @@
 """
 Worktree menu: picks where Claude Code is launched in a git repo, its main folder or one of its worktrees (see worktrees.py).
 
-The list holds a new worktree entry, the main folder entry, then the worktrees of the repo.
-Right opens the options of the new worktree entry in a right column: editing the base
-branches of the repo, or a worktree started from any branch of the repo, remote ones
-included, without saving it as a base branch. Left/Esc closes them. Tab cycles the
-session mode, as in the folder menu.
+The list holds the main folder entry, the worktrees of the repo, then a new worktree entry.
+The worktrees whose origin branch was merged and deleted on the remote are marked as merged.
+Tab cycles the session mode, as in the folder menu.
 
-A new worktree is named, then started from one of the base branches of the repo, picked
-in a list unless there is only one. The first time, the base branches are checked in the
-list of all the branches of the repo.
+A new worktree is named, then started from a branch of the repo picked in a list: the favorite
+branches of the repo are on top, Ctrl+F toggles the highlighted branch as a favorite, typed
+characters filter the list, Backspace erases them and Esc clears the filter.
 """
 
-from launcher import worktrees, worktrees_state
-from launcher.account_menu import OPTIONS_HELP_TEXT
+from launcher import history, worktrees, worktrees_state
 from launcher.accounts import account_header_line
 from launcher.folder_menu import NEW_SESSION, SESSION_MODES, session_header_line
-from launcher.keyboard import Key, read_key
+from launcher.keyboard import Key, is_typed_character, read_key
 from launcher.prompts import ask_worktree_name
 from launcher.terminal_ui import (
     BACK,
-    COLUMN_SEPARATOR,
     CYAN,
     DARK_GRAY,
     GREEN,
@@ -30,28 +26,35 @@ from launcher.terminal_ui import (
     HeaderLine,
     ListSelection,
     Message,
-    join_columns,
+    SectionTitle,
     render_screen,
 )
 
-WORKTREE_HELP_TEXT = "  Up/Down: Highlight   Right: Options   Tab: Session   Enter: Launch   Esc: Back   Ctrl+C: Quit"
-BASE_BRANCHES_HELP_TEXT = "  Up/Down: Highlight   Space: Check   Enter: Save   Esc: Cancel   Ctrl+C: Quit"
-BRANCH_PICKER_HELP_TEXT = "  Up/Down: Highlight   Enter: Select   Esc: Back   Ctrl+C: Quit"
+WORKTREE_HELP_TEXT = "  Up/Down: Highlight   Tab: Session   Enter: Launch   Esc: Back   Ctrl+C: Quit"
+BRANCH_PICKER_HELP_TEXT = "  Up/Down: Highlight   Type: Filter   Ctrl+F: Favorite   Enter: Select   Esc: Back   Ctrl+C: Quit"
 
-BASE_BRANCHES_MESSAGE = Message("Choose the base branches of this folder.", CYAN)
-BRANCH_PICKER_MESSAGE = Message("Source branch of the new worktree.", CYAN)
+BRANCH_PICKER_MESSAGE = Message("Origin branch of the new worktree.", CYAN)
 
 # INFO: Entries of the list besides the worktrees, NO_WORKTREE is also the outcome of the menu for the main folder
 ADD_WORKTREE = object()
 NO_WORKTREE = object()
 
-EDIT_BASE_BRANCHES = "Edit base branches"
-WORKTREE_FROM_BRANCH = "Worktree from branch"
-ADD_WORKTREE_OPTIONS = [EDIT_BASE_BRANCHES, WORKTREE_FROM_BRANCH]
+FAVORITES_TITLE = SectionTitle("★ Favorites")
+BRANCHES_TITLE = SectionTitle("Branches")
+
+
+def format_origin(worktree):
+    """Returns the origin of the worktree followed by its merged marker, None without origin."""
+    if worktree.origin_branch is None:
+        return None
+
+    return f"{worktree.origin_branch} · merged" if worktree.is_merged else worktree.origin_branch
 
 
 def worktree_header_line(worktree, color):
-    return HeaderLine("Worktree", f"{worktree.name}  (from {worktree.source_branch})", color)
+    origin = format_origin(worktree)
+
+    return HeaderLine("Worktree", worktree.name if origin is None else f"{worktree.name}  (from {origin})", color)
 
 
 def entry_label(entry):
@@ -62,60 +65,103 @@ def entry_label(entry):
 
 
 def entry_secondary_label(entry):
-    return f"from {entry.source_branch}" if isinstance(entry, worktrees.Worktree) else None
+    if not isinstance(entry, worktrees.Worktree) or entry.origin_branch is None:
+        return None
+
+    return f"from {format_origin(entry)}"
 
 
-def prompt_for_base_branches(repo, header_lines):
-    """Checks and saves the base branches of the repo. Returns them, None on Esc or QUIT on Ctrl+C."""
-    branches = worktrees.list_branches(repo)
-    # INFO: A saved branch deleted since is dropped
-    checked = set(worktrees_state.load_base_branches(repo)) & set(branches)
-    selection = ListSelection(branches, lambda branch: f"[{'x' if branch in checked else ' '}] {branch}")
-    notice = None
+class BranchPicker:
+    """Picks the origin branch of a new worktree. Each key handler returns the outcome of the picker, or None to go on."""
 
-    while True:
-        render_screen(header_lines, selection.render, BASE_BRANCHES_HELP_TEXT, notice or BASE_BRANCHES_MESSAGE)
-        key = read_key()
-        notice = None
+    def __init__(self, repo, header_lines):
+        self.repo = repo
+        self.header_lines = header_lines
+        self.notice = None
+        self.filter_text = ""
+        self.branches = worktrees.list_branches(repo)
+        self.favorite_branches = []
+        self.selection = None
+        self.load_favorites()
+        self.rebuild()
 
-        if key == Key.CTRL_C:
-            return QUIT
+    @property
+    def screen_lines(self):
+        if not self.filter_text:
+            return self.header_lines
 
-        if selection.handle_key(key):
-            continue
+        return [*self.header_lines, HeaderLine("Filter", self.filter_text, DARK_GRAY)]
 
-        if key == Key.SPACE and selection.selected is not None:
-            checked ^= {selection.selected}
-        elif key == Key.ENTER and not checked:
-            notice = Message("Choose at least one base branch.", RED)
-        elif key == Key.ENTER:
-            base_branches = [branch for branch in branches if branch in checked]
-            worktrees_state.save_base_branches(repo, base_branches)
+    def load_favorites(self):
+        # INFO: A favorite deleted since is hidden, but stays saved
+        self.favorite_branches = sorted(
+            (branch for branch in worktrees_state.load_favorite_branches(self.repo) if worktrees.is_existing_branch(self.repo, branch)),
+            key=str.casefold,
+        )
 
-            return base_branches
+    def rebuild(self, selected_branch=None):
+        def matches_filter(branch):
+            return self.filter_text.casefold() in branch.casefold()
+
+        favorites = [branch for branch in self.favorite_branches if matches_filter(branch)]
+        branches = [branch for branch in self.branches if matches_filter(branch)]
+        favorites_section = [FAVORITES_TITLE, *favorites, SEPARATOR] if favorites else []
+        items = [*favorites_section, BRANCHES_TITLE, *branches]
+        matching_indexes = [index for index, item in enumerate(items) if item == selected_branch] if selected_branch is not None else []
+
+        # INFO: A branch both favorite and listed is highlighted among the branches, listed last
+        self.selection = ListSelection(items, selected_index=matching_indexes[-1] if matching_indexes else 0)
+
+    def handle_key(self, key):
+        """Returns the picked branch, BACK on Esc with an empty filter, or None to go on."""
+        selected = self.selection.selected
+
+        if key == Key.ENTER and selected is not None:
+            return selected
+
+        if key == Key.CTRL_F and selected is not None:
+            self.toggle_favorite(selected)
+        elif key == Key.BACKSPACE and self.filter_text:
+            self.set_filter(self.filter_text[:-1])
+        elif key == Key.ESC and self.filter_text:
+            self.set_filter("")
         elif key == Key.ESC:
-            return None
+            return BACK
+        elif is_typed_character(key):
+            self.set_filter(self.filter_text + key)
+
+        return None
+
+    def toggle_favorite(self, branch):
+        is_favorite = worktrees_state.toggle_favorite_branch(self.repo, branch)
+        self.load_favorites()
+        self.rebuild(branch)
+        self.notice = Message(f"Added {branch} to favorites." if is_favorite else f"Removed {branch} from favorites.", GREEN)
+
+    def set_filter(self, filter_text):
+        self.filter_text = filter_text
+        self.rebuild()
 
 
-def prompt_for_branch(branches, header_lines):
+def prompt_for_branch(repo, header_lines):
     """Returns the picked branch, BACK on Esc or QUIT on Ctrl+C."""
-    selection = ListSelection(branches)
+    picker = BranchPicker(repo, header_lines)
 
     while True:
-        render_screen(header_lines, selection.render, BRANCH_PICKER_HELP_TEXT, BRANCH_PICKER_MESSAGE)
+        render_screen(picker.screen_lines, picker.selection.render, BRANCH_PICKER_HELP_TEXT, picker.notice or BRANCH_PICKER_MESSAGE)
         key = read_key()
+        picker.notice = None
 
         if key == Key.CTRL_C:
             return QUIT
 
-        if selection.handle_key(key):
+        if picker.selection.handle_key(key):
             continue
 
-        if key == Key.ENTER:
-            return selection.selected
+        outcome = picker.handle_key(key)
 
-        if key == Key.ESC:
-            return BACK
+        if outcome is not None:
+            return outcome
 
 
 class WorktreeMenu:
@@ -127,11 +173,14 @@ class WorktreeMenu:
         self.header_lines = header_lines
         self.account = account
         self.session_index = SESSION_MODES.index(session)
-        self.selection = None
-        # INFO: Right column of the new worktree options, None while closed
-        self.side_selection = None
         self.message = None
-        self.reload()
+
+        detects_merged = worktrees.fetch_prune(repo)
+        worktree_list = worktrees.load_worktrees(repo, detects_merged=detects_merged)
+        history.remove_stale_links(account.config_dir, repo, worktrees.list_registered_paths(repo))
+        items = [NO_WORKTREE, *([SEPARATOR, *worktree_list] if worktree_list else []), SEPARATOR, ADD_WORKTREE]
+        # INFO: No worktree is highlighted first, so that a double Enter launches in the main folder as before worktrees
+        self.selection = ListSelection(items, entry_label, 0, entry_secondary_label)
 
     @property
     def session(self):
@@ -150,50 +199,20 @@ class WorktreeMenu:
             session_header_line(self.session, DARK_GRAY if self.session is NEW_SESSION else CYAN),
         ]
 
-    def reload(self, selected_entry=NO_WORKTREE):
-        worktree_list = worktrees.load_worktrees(self.repo)
-        items = [ADD_WORKTREE, NO_WORKTREE] + ([SEPARATOR] + worktree_list if worktree_list else [])
-        selected_index = items.index(selected_entry) if selected_entry in items else items.index(NO_WORKTREE)
-        # INFO: No worktree is highlighted first, so that a double Enter launches in the main folder as before worktrees
-        self.selection = ListSelection(items, entry_label, selected_index, entry_secondary_label)
-
     def run(self):
         """Returns the chosen worktree, NO_WORKTREE for the main folder, BACK on Esc or QUIT on Ctrl+C."""
         while True:
-            self.render()
+            render_screen(self.screen_lines, self.selection.render, WORKTREE_HELP_TEXT, self.message)
             key = read_key()
             self.message = None
 
             if key == Key.CTRL_C:
                 return QUIT
 
-            outcome = self.handle_list_key(key) if self.side_selection is None else self.handle_options_key(key)
+            outcome = self.handle_list_key(key)
 
             if outcome is not None:
                 return outcome
-
-    def render(self):
-        def render_body(available_rows, max_length):
-            if self.side_selection is None:
-                return self.selection.render(available_rows, max_length)
-
-            # INFO: A secondary label is rendered after its label, 2 spaces apart
-            longest_label = max(
-                len(entry_label(item)) + len(entry_secondary_label(item) or "") + 2
-                for item in self.selection.items
-                if item is not SEPARATOR
-            )
-            left_width = min(longest_label + 4, max_length // 2)
-            right_width = max_length - left_width - len(COLUMN_SEPARATOR)
-
-            return join_columns(
-                self.selection.render(available_rows, left_width, has_cursor=False),
-                self.side_selection.render(available_rows, right_width),
-                left_width,
-            )
-
-        help_text = WORKTREE_HELP_TEXT if self.side_selection is None else OPTIONS_HELP_TEXT
-        render_screen(self.screen_lines, render_body, help_text, self.message)
 
     def handle_list_key(self, key):
         if self.selection.handle_key(key):
@@ -206,8 +225,6 @@ class WorktreeMenu:
 
         if key == Key.TAB:
             self.session_index = (self.session_index + 1) % len(SESSION_MODES)
-        elif key == Key.RIGHT and entry is ADD_WORKTREE:
-            self.side_selection = ListSelection(ADD_WORKTREE_OPTIONS)
         elif key == Key.ENTER and entry is ADD_WORKTREE:
             return self.add_worktree()
         elif key == Key.ENTER:
@@ -231,21 +248,6 @@ class WorktreeMenu:
 
         return name
 
-    def start_worktree(self, name, source_branch):
-        """Creates the worktree from the picked source branch. Returns it, QUIT on Ctrl+C, or None to stay in the menu."""
-        if source_branch is QUIT:
-            return QUIT
-
-        if source_branch is BACK:
-            return None
-
-        worktree = worktrees.create_worktree(self.repo, name, source_branch)
-
-        if worktree is None:
-            self.message = Message("Could not create the worktree.", RED)
-
-        return worktree
-
     def add_worktree(self):
         """Returns the created worktree, QUIT on Ctrl+C, or None to stay in the menu."""
         name = self.ask_valid_worktree_name()
@@ -253,58 +255,20 @@ class WorktreeMenu:
         if name is None:
             return None
 
-        base_branches = worktrees_state.load_base_branches(self.repo) or prompt_for_base_branches(self.repo, self.screen_lines)
+        origin_branch = prompt_for_branch(self.repo, self.screen_lines)
 
-        if base_branches is None or base_branches is QUIT:
-            return base_branches
-
-        source_branch = base_branches[0] if len(base_branches) == 1 else prompt_for_branch(base_branches, self.screen_lines)
-
-        return self.start_worktree(name, source_branch)
-
-    def handle_options_key(self, key):
-        if self.side_selection.handle_key(key):
-            return None
-
-        if key in (Key.LEFT, Key.ESC):
-            self.side_selection = None
-
-            return None
-
-        if key != Key.ENTER:
-            return None
-
-        actions = {
-            EDIT_BASE_BRANCHES: self.edit_base_branches,
-            WORKTREE_FROM_BRANCH: self.add_worktree_from_branch,
-        }
-
-        return actions[self.side_selection.selected]()
-
-    def add_worktree_from_branch(self):
-        """Creates a worktree started from any branch of the repo, local or remote, without saving it as a base branch.
-        Returns the created worktree, QUIT on Ctrl+C, or None to stay in the menu."""
-        self.side_selection = None
-        name = self.ask_valid_worktree_name()
-
-        if name is None:
-            return None
-
-        source_branch = prompt_for_branch(worktrees.list_branches(self.repo), self.screen_lines)
-
-        return self.start_worktree(name, source_branch)
-
-    def edit_base_branches(self):
-        self.side_selection = None
-        base_branches = prompt_for_base_branches(self.repo, self.screen_lines)
-
-        if base_branches is QUIT:
+        if origin_branch is QUIT:
             return QUIT
 
-        if base_branches is not None:
-            self.message = Message("Base branches saved.", GREEN)
+        if origin_branch is BACK:
+            return None
 
-        return None
+        worktree = worktrees.create_worktree(self.repo, name, origin_branch)
+
+        if worktree is None:
+            self.message = Message("Could not create the worktree.", RED)
+
+        return worktree
 
 
 def prompt_for_worktree(repo, folder, header_lines, account, session):

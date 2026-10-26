@@ -1,3 +1,4 @@
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -13,28 +14,54 @@ class WorktreesStateTest(unittest.TestCase):
     def setUp(self):
         temp_dir = tempfile.TemporaryDirectory()
         self.addCleanup(temp_dir.cleanup)
-        state_patch = patch("launcher.worktrees_state.WORKTREES_STATE_FILE", Path(temp_dir.name) / "worktrees_state.json")
+        self.state_file = Path(temp_dir.name) / "worktrees_state.json"
+        state_patch = patch("launcher.worktrees_state.WORKTREES_STATE_FILE", self.state_file)
         state_patch.start()
         self.addCleanup(state_patch.stop)
 
+    def read_repo_state(self, repo):
+        return json.loads(self.state_file.read_text(encoding="utf-8"))["repos"][str(repo)]
+
     def test_unknown_repo_has_no_state(self):
         self.assertIsNone(worktrees_state.load_repo_id(REPO))
-        self.assertEqual(worktrees_state.load_base_branches(REPO), [])
-        self.assertEqual(worktrees_state.load_worktree_sources(REPO), {})
+        self.assertEqual(worktrees_state.load_favorite_branches(REPO), [])
 
-    def test_saved_values_are_read_back_per_repo(self):
+    def test_repo_id_is_read_back_per_repo(self):
         worktrees_state.save_repo_id(REPO, "a1b2c3d4")
-        worktrees_state.save_base_branches(REPO, ["release/test", "stage"])
-        worktrees_state.save_worktree(REPO, "quick-fix", "stage")
 
         self.assertEqual(worktrees_state.load_repo_id(REPO), "a1b2c3d4")
-        self.assertEqual(worktrees_state.load_base_branches(REPO), ["release/test", "stage"])
-        self.assertEqual(worktrees_state.load_worktree_sources(REPO), {"quick-fix": "stage"})
-        self.assertEqual(worktrees_state.load_base_branches(OTHER_REPO), [])
+        self.assertIsNone(worktrees_state.load_repo_id(OTHER_REPO))
 
-    def test_forget_worktree_keeps_the_others(self):
-        worktrees_state.save_worktree(REPO, "a", "dev")
-        worktrees_state.save_worktree(REPO, "b", "dev")
-        worktrees_state.forget_worktree(REPO, "a")
+    def test_toggle_adds_then_removes_a_favorite_branch(self):
+        self.assertTrue(worktrees_state.toggle_favorite_branch(REPO, "dev"))
+        self.assertTrue(worktrees_state.toggle_favorite_branch(REPO, "origin/stage"))
 
-        self.assertEqual(worktrees_state.load_worktree_sources(REPO), {"b": "dev"})
+        self.assertEqual(worktrees_state.load_favorite_branches(REPO), ["dev", "origin/stage"])
+        self.assertEqual(self.read_repo_state(REPO)["favorite_branches"], ["dev", "origin/stage"])
+
+        self.assertFalse(worktrees_state.toggle_favorite_branch(REPO, "dev"))
+
+        self.assertEqual(worktrees_state.load_favorite_branches(REPO), ["origin/stage"])
+        self.assertEqual(self.read_repo_state(REPO)["favorite_branches"], ["origin/stage"])
+
+    def test_favorite_branches_are_per_repo(self):
+        worktrees_state.toggle_favorite_branch(REPO, "dev")
+
+        self.assertEqual(worktrees_state.load_favorite_branches(OTHER_REPO), [])
+
+    def test_favorite_branches_keep_the_repo_id(self):
+        worktrees_state.save_repo_id(REPO, "a1b2c3d4")
+        worktrees_state.toggle_favorite_branch(REPO, "dev")
+
+        self.assertEqual(self.read_repo_state(REPO), {"id": "a1b2c3d4", "favorite_branches": ["dev"]})
+
+    def test_old_base_branches_are_ignored(self):
+        old_state = {"repos": {str(REPO): {"id": "a1b2c3d4", "base_branches": ["dev"], "worktrees": {"fix": {"source_branch": "dev"}}}}}
+        self.state_file.write_text(json.dumps(old_state), encoding="utf-8")
+
+        self.assertEqual(worktrees_state.load_favorite_branches(REPO), [])
+        self.assertEqual(worktrees_state.load_repo_id(REPO), "a1b2c3d4")
+
+    def test_old_api_is_removed(self):
+        for name in ("load_base_branches", "save_base_branches", "load_worktree_sources", "save_worktree", "forget_worktree"):
+            self.assertFalse(hasattr(worktrees_state, name), name)

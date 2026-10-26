@@ -3,15 +3,17 @@ Git worktrees where Claude Code works beside the main folder of a repo, without 
 
 Every worktree of a repo lives in ~/.claude-worktrees/<id>/<name>/, the id being generated
 once per repo (see worktrees_state.py), and works on its own temp/<name> branch created from
-a branch of the repo, usually one of its base branches. Finishing or deleting a worktree is
-done outside the launcher, which never pushes anything.
+a branch of the repo, which becomes its upstream: the origin of a worktree is read from git, as
+the worktrees themselves. Finishing or deleting a worktree is done outside the launcher, which
+never pushes anything.
 """
 
 import secrets
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
-from launcher import worktrees_state
+from launcher import git_repo, worktrees_state
 from launcher.folder_menu import is_valid_folder_name
 from launcher.git_repo import run_git, succeeds
 from launcher.paths import WORKTREES_DIR
@@ -25,7 +27,9 @@ REMOTE_BRANCHES_PREFIX = "refs/remotes/"
 class Worktree:
     name: str
     path: Path
-    source_branch: str
+    repo: Path
+    origin_branch: str | None = None
+    is_merged: bool = False
 
     @property
     def branch(self):
@@ -49,18 +53,29 @@ def branch_exists(repo, branch):
     return succeeds(repo, "rev-parse", "--verify", "--quiet", f"{LOCAL_BRANCHES_PREFIX}{branch}")
 
 
+def remote_branch_exists(repo, branch):
+    return succeeds(repo, "rev-parse", "--verify", "--quiet", f"{REMOTE_BRANCHES_PREFIX}{branch}")
+
+
+def strip_remote(branch):
+    """Returns the branch without its remote name (origin/stage becomes stage)."""
+    return branch.split("/", 1)[-1]
+
+
 def is_valid_branch_name(repo, branch):
     return succeeds(repo, "check-ref-format", "--branch", branch)
 
 
 def list_branches(repo):
-    """Returns the local branches, then the remote ones (e.g. origin/stage) that have no local branch."""
+    """Returns the local branches, then the remote ones (e.g. origin/stage) that have no local branch, temp/* excluded."""
     local_branches = [branch for branch in list_refs(repo, LOCAL_BRANCHES_PREFIX) if not branch.startswith(TEMP_BRANCH_PREFIX)]
     # INFO: origin/HEAD only points to the default branch of the remote
     remote_branches = [
         branch
         for branch in list_refs(repo, REMOTE_BRANCHES_PREFIX)
-        if not branch.endswith("/HEAD") and branch.split("/", 1)[-1] not in local_branches
+        if not branch.endswith("/HEAD")
+        and not strip_remote(branch).startswith(TEMP_BRANCH_PREFIX)
+        and strip_remote(branch) not in local_branches
     ]
 
     return sorted(local_branches, key=str.casefold) + sorted(remote_branches, key=str.casefold)
@@ -73,21 +88,12 @@ def find_repo_dir(repo):
     return WORKTREES_DIR / repo_id if repo_id is not None else None
 
 
-def get_repo_dir(repo):
-    repo_dir = find_repo_dir(repo)
-
-    if repo_dir is not None:
-        return repo_dir
-
+def generate_repo_id():
     while True:
         repo_id = secrets.token_hex(4)
 
         if not (WORKTREES_DIR / repo_id).exists():
-            break
-
-    worktrees_state.save_repo_id(repo, repo_id)
-
-    return WORKTREES_DIR / repo_id
+            return repo_id
 
 
 def validate_worktree_name(repo, name):
@@ -103,38 +109,51 @@ def validate_worktree_name(repo, name):
     return None
 
 
-def create_worktree(repo, name, source_branch):
+def create_worktree(repo, name, origin_branch):
     """Returns the created worktree, or None when git fails."""
-    is_remote = not branch_exists(repo, source_branch) and succeeds(
-        repo, "rev-parse", "--verify", "--quiet", f"{REMOTE_BRANCHES_PREFIX}{source_branch}"
-    )
+    if not branch_exists(repo, origin_branch) and remote_branch_exists(repo, origin_branch):
+        # INFO: The worktree starts from a local branch, which follows the remote one
+        local_branch = strip_remote(origin_branch)
 
-    if is_remote:
-        # INFO: The worktree starts from a local branch, which follows the remote one. A base branch saved
-        # while it was only on the remote keeps its remote name, its local branch is reused once created
-        local_branch = source_branch.split("/", 1)[-1]
-
-        if not branch_exists(repo, local_branch) and not succeeds(repo, "branch", "--quiet", "--track", local_branch, source_branch):
+        if not branch_exists(repo, local_branch) and not succeeds(repo, "branch", "--quiet", "--track", local_branch, origin_branch):
             return None
 
-        source_branch = local_branch
+        origin_branch = local_branch
 
-    worktree = Worktree(name, get_repo_dir(repo) / name, source_branch)
+    repo_id = worktrees_state.load_repo_id(repo)
+    is_new_repo = repo_id is None
 
-    if not succeeds(repo, "worktree", "add", "--quiet", "-b", worktree.branch, str(worktree.path), source_branch):
+    if is_new_repo:
+        repo_id = generate_repo_id()
+
+    worktree = Worktree(name, WORKTREES_DIR / repo_id / name, repo, origin_branch)
+
+    if not succeeds(repo, "worktree", "add", "--quiet", "--track", "-b", worktree.branch, str(worktree.path), origin_branch):
         return None
 
-    worktrees_state.save_worktree(repo, name, source_branch)
+    if is_new_repo:
+        worktrees_state.save_repo_id(repo, repo_id)
 
     return worktree
 
 
+def list_registered_worktrees(repo):
+    """Returns the folder and local branch (None when detached) of each worktree git knows, the main folder included."""
+    result = run_git(repo, "worktree", "list", "--porcelain")
+    registered = []
+
+    for line in result.stdout.splitlines() if result.returncode == 0 else []:
+        if line.startswith("worktree "):
+            registered.append((Path(line.removeprefix("worktree ")).resolve(), None))
+        elif line.startswith("branch " + LOCAL_BRANCHES_PREFIX) and registered:
+            registered[-1] = (registered[-1][0], line.removeprefix("branch " + LOCAL_BRANCHES_PREFIX))
+
+    return registered
+
+
 def list_registered_paths(repo):
     """Returns the folders of the worktrees git knows for the repo, the main folder included."""
-    result = run_git(repo, "worktree", "list", "--porcelain")
-    lines = result.stdout.splitlines() if result.returncode == 0 else []
-
-    return {Path(line.removeprefix("worktree ")).resolve() for line in lines if line.startswith("worktree ")}
+    return {path for path, _ in list_registered_worktrees(repo)}
 
 
 def remove_orphan_folders(repo_dir, registered_paths):
@@ -152,20 +171,47 @@ def remove_orphan_folders(repo_dir, registered_paths):
                 pass
 
 
-def load_worktrees(repo):
+def is_existing_branch(repo, branch):
+    """Returns whether the branch exists, as a local branch or as a remote one (e.g. origin/stage)."""
+    return branch_exists(repo, branch) or remote_branch_exists(repo, branch)
+
+
+def fetch_prune(repo):
+    """Returns whether git fetch --prune succeeded within a short timeout."""
+    try:
+        return succeeds(repo, "fetch", "--prune", "--quiet", timeout=git_repo.FETCH_TIMEOUT_SECONDS)
+    except subprocess.TimeoutExpired:
+        return False
+
+
+def read_origin(repo, branch):
+    """Returns the local branch the branch tracks, or None without upstream."""
+    result = run_git(repo, "rev-parse", "--abbrev-ref", f"{branch}@{{upstream}}")
+
+    return result.stdout.strip() if result.returncode == 0 else None
+
+
+def is_gone(repo, branch):
+    """Returns whether the branch tracks a remote branch that no longer exists."""
+    result = run_git(repo, "for-each-ref", "--format=%(upstream:track)", f"{LOCAL_BRANCHES_PREFIX}{branch}")
+
+    return result.returncode == 0 and result.stdout.strip() == "[gone]"
+
+
+def load_worktrees(repo, detects_merged=False):
     """Returns the worktrees of the repo sorted by name, after forgetting those git no longer knows."""
     succeeds(repo, "worktree", "prune")
-    registered_paths = list_registered_paths(repo)
+    registered = list_registered_worktrees(repo)
     repo_dir = find_repo_dir(repo)
-    remove_orphan_folders(repo_dir, registered_paths)
+    remove_orphan_folders(repo_dir, {path for path, _ in registered})
     worktrees = []
 
-    for name, source_branch in worktrees_state.load_worktree_sources(repo).items():
-        worktree = Worktree(name, repo_dir / name, source_branch) if repo_dir is not None else None
+    for path, branch in registered:
+        if repo_dir is None or path.parent != repo_dir.resolve() or branch != f"{TEMP_BRANCH_PREFIX}{path.name}":
+            continue
 
-        if worktree is not None and worktree.path.resolve() in registered_paths:
-            worktrees.append(worktree)
-        else:
-            worktrees_state.forget_worktree(repo, name)
+        origin_branch = read_origin(repo, branch)
+        is_merged = detects_merged and origin_branch is not None and is_gone(repo, origin_branch)
+        worktrees.append(Worktree(path.name, repo_dir / path.name, repo, origin_branch, is_merged))
 
     return sorted(worktrees, key=lambda worktree: worktree.name.casefold())

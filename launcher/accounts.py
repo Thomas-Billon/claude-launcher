@@ -23,6 +23,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from launcher import launcher_state
+from launcher.junctions import create_junction
 from launcher.paths import ACCOUNTS_DIR, SHARED_CONFIG_DIR, SHARED_SETTINGS_FILE
 from launcher.terminal_ui import GREEN, HeaderLine
 
@@ -131,10 +132,7 @@ def prepare_account_dir(config_dir):
         if not source.is_dir() or os.path.lexists(link):
             continue
 
-        # INFO: Junctions need no admin rights, unlike directory symlinks
-        result = subprocess.run(["cmd", "/c", "mklink", "/J", str(link), str(source)], capture_output=True)
-
-        if result.returncode != 0:
+        if not create_junction(link, source):
             failed_links.append(name)
 
     claude_md = config_dir / "CLAUDE.md"

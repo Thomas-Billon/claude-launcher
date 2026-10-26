@@ -137,27 +137,23 @@ Ligne `Session` de l'en-tête, `Tab` passe à la suivante :
 
 ### Choix du worktree
 
-Étape affichée après le choix du dossier, **seulement s'il est dans un repo git**. Liste : `+ Worktree`, `No worktree` (sélectionné par défaut : lance dans le dossier choisi, comme avant), une ligne vide, puis les worktrees du repo (`nom  from <branche source>`).
+Étape affichée après le choix du dossier, **seulement s'il est dans un repo git**. Liste : `No worktree` (sélectionné par défaut : lance dans le dossier choisi, comme avant), les worktrees du repo triés par nom (`nom  from <branche d'origine>`), puis `+ Worktree`.
 
 | Touche | Action |
 |--------|--------|
 | `↑` `↓` | Sélectionner une ligne |
-| `→` | Ouvrir les options de la ligne |
-| `←` `Échap` | Fermer les options |
 | `Tab` | Changer de [session](#session) |
 | `Entrée` | **Lancer Claude Code** dans le dossier ou le worktree (ou créer un worktree sur `+ Worktree`) |
 | `Échap` | Revenir au choix du dossier (le dossier reste sélectionné) |
 | `Ctrl+C` | Quitter |
 
-- 🌳 `+ Worktree` : nom du worktree, puis branche de départ parmi les **branches de départ** du repo (choix sauté s'il n'y en a qu'une), puis lancement de Claude Code dans `~/.claude-worktrees/<id>/<nom>/`, sur une nouvelle branche `temp/<nom>`
-- 🌿 **Branches de départ** : choisies au premier `+ Worktree` du repo, parmi ses branches locales puis distantes (`Espace` coche, `Entrée` enregistre, `Échap` annule). Une branche distante choisie crée la branche locale qui la suit
-- 🧹 À l'ouverture de l'étape : les worktrees dont le dossier a été supprimé sont retirés (`git worktree prune`, leur branche `temp/` est gardée), et les dossiers vides restés dans `~/.claude-worktrees/<id>/` (worktree supprimé pendant que Claude Code tournait dedans) sont supprimés. Un dossier non vide n'est jamais touché
+- 🌳 `+ Worktree` : nom du worktree, puis branche d'origine choisie dans une liste, puis lancement de Claude Code dans `~/.claude-worktrees/<id>/<nom>/`, sur une nouvelle branche `temp/<nom>`
+- 🌿 **Branches d'origine** : les branches **favorites** du repo en haut (`★ Favorites`), puis toutes ses branches, locales puis distantes sans branche locale (`temp/*` exclues). Les caractères tapés filtrent la liste, `Retour arrière` en efface un, `Échap` vide le filtre (ou revient en arrière s'il est vide) et `Ctrl+F` ajoute ou retire la branche sélectionnée des favoris. Une branche distante choisie crée d'abord la branche locale qui la suit
+- 🔗 **Origine = upstream** : `temp/<nom>` est créée avec sa branche d'origine pour upstream (`git worktree add --track`), donc `git rev-parse --abbrev-ref temp/<nom>@{upstream}` la donne à n'importe quel outil, sans passer par le launcher
+- ✅ **Marqueur `merged`** : à l'ouverture de l'étape, un `git fetch --prune` (avec un court timeout, un échec ou un timeout saute seulement cette détection) met à jour les branches distantes. Un worktree dont la branche d'origine suit une branche distante supprimée est marqué `merged` (`nom  from <origine> · merged`), y compris après un squash merge. Chaque ordinateur sait ainsi quels worktrees nettoyer
+- 💬 **Historique partagé** : l'historique des conversations d'un worktree est celui du dossier principal du repo. Au lancement dans un worktree avec un compte, `projects/<chemin du worktree encodé>` du compte est une jonction vers `projects/<chemin du repo encodé>` (créée avec sa cible si besoin, un vrai dossier existant n'est jamais touché), donc `continue the last conversation` depuis le dossier principal retrouve aussi les conversations des worktrees. Dans un worktree, `continue the last conversation` reprend la dernière conversation lancée dans ce worktree (`--resume <id de session>`), sinon une nouvelle conversation. L'historique des worktrees créés avant ce changement n'est pas migré
+- 🧹 À l'ouverture de l'étape : les worktrees dont le dossier a été supprimé sont retirés (`git worktree prune`, leur branche `temp/` est gardée), les dossiers vides restés dans `~/.claude-worktrees/<id>/` (worktree supprimé pendant que Claude Code tournait dedans) sont supprimés, et les jonctions d'historique des worktrees que git ne connaît plus sont retirées (l'historique pointé est gardé). Un dossier non vide n'est jamais touché
 - 🪟 Titre de l'onglet : `Claude Code · <compte> · <projet> · <worktree>`
-
-| Option | Sur | Effet |
-|--------|-----|-------|
-| `Edit base branches` | `+ Worktree` | Modifie les branches de départ du repo |
-| `Worktree from branch` | `+ Worktree` | Nom du worktree, puis n'importe quelle branche du repo, locale ou distante (une branche distante crée la branche locale qui la suit), sans l'enregistrer comme branche de départ. Sert à reprendre sur une autre machine une branche poussée depuis la première |
 
 > [!IMPORTANT]
 > - Terminer ou supprimer un worktree se fait **hors du launcher**, avec git ou depuis Claude Code. Le launcher ne **pousse jamais** rien.
@@ -250,9 +246,11 @@ Sans repo : étape ignorée. Pour activer, changer ou désactiver : relancer `./
 | `launcher/launcher_state.py` | `launcher_state.json` : nom, dossier par défaut, favoris |
 | `launcher/account_menu.py` | Menu des comptes et options |
 | `launcher/folder_menu.py` | Choix du dossier : filtre, nouveau dossier, session |
-| `launcher/worktree_menu.py` | Choix du worktree : options, branches de départ, choix de la branche |
-| `launcher/worktrees.py` | Worktrees : création, liste, nettoyage des dossiers vides (commandes git) |
-| `launcher/worktrees_state.py` | `worktrees_state.json` : id, branches de départ et branche source des worktrees, par repo |
+| `launcher/worktree_menu.py` | Choix du worktree : liste, choix de la branche d'origine avec favoris |
+| `launcher/worktrees.py` | Worktrees : création, liste, origine, détection `merged`, nettoyage des dossiers vides (commandes git) |
+| `launcher/history.py` | Historique des conversations : dossier d'un chemin, jonction d'un worktree, dernière session, nettoyage des jonctions |
+| `launcher/junctions.py` | Création des jonctions de dossier |
+| `launcher/worktrees_state.py` | `worktrees_state.json` : id du dossier des worktrees et branches favorites, par repo |
 | `launcher/json_store.py` | Lecture et écriture atomique des fichiers JSON d'état |
 | `launcher/prompts.py` | Questions `Y/N`, messages de commit, noms de compte et de dossier |
 | `launcher/keyboard.py` | Lecture du clavier |
@@ -273,4 +271,4 @@ Hors du repo, dans le dossier utilisateur :
 | Dossier | Rôle |
 |---------|------|
 | `~/.claude-accounts/` | Comptes et `launcher_state.json` |
-| `~/.claude-worktrees/` | Worktrees (`<id>/<nom>/`, un id par repo) et `worktrees_state.json` |
+| `~/.claude-worktrees/` | Worktrees (`<id>/<nom>/`, un id par repo) et `worktrees_state.json` (`{"repos": {"<racine du repo>": {"id": "<hex>", "favorite_branches": ["dev", "origin/stage"]}}}`) |

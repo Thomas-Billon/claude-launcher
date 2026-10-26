@@ -25,9 +25,9 @@ import sys
 from collections import namedtuple
 from pathlib import Path
 
-from launcher import accounts, launcher_state, repo_sync, worktrees
+from launcher import accounts, history, launcher_state, repo_sync, worktrees
 from launcher.account_menu import prompt_for_account
-from launcher.folder_menu import NEW_SESSION, get_start_dir, prompt_for_launch_folder, session_header_line
+from launcher.folder_menu import CONTINUE_SESSION, NEW_SESSION, get_start_dir, prompt_for_launch_folder, session_header_line
 from launcher.worktree_menu import NO_WORKTREE, prompt_for_worktree, worktree_header_line
 from launcher.terminal_ui import (
     BACK,
@@ -210,12 +210,25 @@ def cancel():
     return 0
 
 
+def build_session_arguments(account, session, worktree):
+    """Returns the Claude Code arguments of the session mode, which continues the last conversation of the worktree itself."""
+    if worktree is None or session is not CONTINUE_SESSION:
+        return list(session.claude_arguments)
+
+    session_id = history.find_last_session(account.config_dir, worktree.repo, worktree.path)
+
+    return ["--resume", session_id] if session_id is not None else []
+
+
 def launch_claude_code(account, folder, worktree, claude_arguments):
     """Returns the exit code of Claude Code."""
     failed_links = accounts.prepare_account_dir(account.config_dir)
 
     if failed_links:
         print(colorize(f"  Warning: could not link shared {', '.join(failed_links)} from ~/.claude", YELLOW))
+
+    if worktree is not None and not history.link_worktree_history(account.config_dir, worktree.path, worktree.repo):
+        print(colorize("  Warning: could not share the conversation history of the main folder with the worktree", YELLOW))
 
     print(colorize("  Opening Claude Code…", CYAN))
     print()
@@ -276,7 +289,8 @@ def main():
     if account is None:
         return cancel()
 
-    exit_code = launch_claude_code(account, folder, worktree, [*session.claude_arguments, *arguments.claude_arguments])
+    claude_arguments = [*build_session_arguments(account, session, worktree), *arguments.claude_arguments]
+    exit_code = launch_claude_code(account, folder, worktree, claude_arguments)
     report_duplicate(account)
 
     return exit_code

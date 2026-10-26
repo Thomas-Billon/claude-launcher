@@ -70,6 +70,7 @@ SESSION_MODES = (
     SessionMode("resume a conversation, picked in Claude Code", ("--resume",)),
 )
 NEW_SESSION = SESSION_MODES[0]
+CONTINUE_SESSION = SESSION_MODES[1]
 
 
 def session_header_line(session, color):

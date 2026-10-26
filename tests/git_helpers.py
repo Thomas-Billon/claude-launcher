@@ -38,3 +38,21 @@ def commit_on_branch(repo, branch, name, content):
     run(repo, "worktree", "add", "--quiet", str(worktree), branch)
     commit_file(worktree, name, content)
     run(repo, "worktree", "remove", str(worktree))
+
+
+def read(repo, *arguments):
+    """Returns the trimmed output of a git command, or None when it fails."""
+    result = subprocess.run(["git", *arguments], cwd=repo, capture_output=True, text=True)
+
+    return result.stdout.strip() if result.returncode == 0 else None
+
+
+def read_upstream(repo, branch):
+    return read(repo, "rev-parse", "--abbrev-ref", f"{branch}@{{upstream}}")
+
+
+def clone(source, destination):
+    run(source.parent, "clone", "--quiet", str(source), str(destination))
+    configure_identity(destination)
+
+    return destination

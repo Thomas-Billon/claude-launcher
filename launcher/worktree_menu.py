@@ -13,7 +13,7 @@ characters filter the list, Backspace erases them and Esc clears the filter.
 from launcher import history, worktrees, worktrees_state
 from launcher.accounts import account_header_line
 from launcher.folder_menu import NEW_SESSION, SESSION_MODES, session_header_line
-from launcher.keyboard import Key, is_typed_character, read_key
+from launcher.keyboard import Key, is_typed_character, read_key, read_key_unless
 from launcher.prompts import ask_worktree_name
 from launcher.terminal_ui import (
     BACK,
@@ -74,15 +74,17 @@ def entry_secondary_label(entry):
 class BranchPicker:
     """Picks the origin branch of a new worktree. Each key handler returns the outcome of the picker, or None to go on."""
 
-    def __init__(self, repo, header_lines):
+    def __init__(self, repo, header_lines, fetch_process):
         self.repo = repo
         self.header_lines = header_lines
+        self.fetch_process = fetch_process
+        self.is_fetch_pending = fetch_process.poll() is None
         self.notice = None
         self.filter_text = ""
-        self.branches = worktrees.list_branches(repo)
+        self.branches = []
         self.favorite_branches = []
         self.selection = None
-        self.load_favorites()
+        self.load_branches()
         self.rebuild()
 
     @property
@@ -91,6 +93,21 @@ class BranchPicker:
             return self.header_lines
 
         return [*self.header_lines, HeaderLine("Filter", self.filter_text, DARK_GRAY)]
+
+    def load_branches(self):
+        self.branches = worktrees.list_branches(self.repo)
+        self.load_favorites()
+
+    def has_fetch_ended(self):
+        """Returns whether the fetch started with the worktree menu has ended since the branches were listed."""
+        return self.is_fetch_pending and self.fetch_process.poll() is not None
+
+    def refresh_after_fetch(self):
+        """Lists again the branches, with those the fetch added or deleted, keeping the highlighted branch."""
+        self.is_fetch_pending = False
+        selected = self.selection.selected
+        self.load_branches()
+        self.rebuild(selected)
 
     def load_favorites(self):
         # INFO: A favorite deleted since is hidden, but stays saved
@@ -143,13 +160,19 @@ class BranchPicker:
         self.rebuild()
 
 
-def prompt_for_branch(repo, header_lines):
+def prompt_for_branch(repo, header_lines, fetch_process):
     """Returns the picked branch, BACK on Esc or QUIT on Ctrl+C."""
-    picker = BranchPicker(repo, header_lines)
+    picker = BranchPicker(repo, header_lines, fetch_process)
 
     while True:
         render_screen(picker.screen_lines, picker.selection.render, BRANCH_PICKER_HELP_TEXT, picker.notice or BRANCH_PICKER_MESSAGE)
-        key = read_key()
+        key = read_key_unless(picker.has_fetch_ended)
+
+        if key is None:
+            picker.refresh_after_fetch()
+
+            continue
+
         picker.notice = None
 
         if key == Key.CTRL_C:
@@ -177,7 +200,7 @@ class WorktreeMenu:
 
         worktree_list = worktrees.load_worktrees(repo)
         # INFO: A fetch takes seconds on some remotes, the merged markers it changes show at the next opening
-        worktrees.start_fetch_prune(repo)
+        self.fetch_process = worktrees.start_fetch_prune(repo)
         history.remove_stale_links(account.config_dir, repo, worktrees.list_registered_paths(repo))
         items = [NO_WORKTREE, *([SEPARATOR, *worktree_list] if worktree_list else []), SEPARATOR, ADD_WORKTREE]
         # INFO: No worktree is highlighted first, so that a double Enter launches in the main folder as before worktrees
@@ -256,7 +279,7 @@ class WorktreeMenu:
         if name is None:
             return None
 
-        origin_branch = prompt_for_branch(self.repo, self.screen_lines)
+        origin_branch = prompt_for_branch(self.repo, self.screen_lines, self.fetch_process)
 
         if origin_branch is QUIT:
             return QUIT

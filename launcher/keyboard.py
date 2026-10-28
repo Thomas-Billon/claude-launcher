@@ -7,8 +7,10 @@ typed letter is never mistaken for an arrow code (K, M…).
 """
 
 import msvcrt
+import time
 
 SPECIAL_KEY_PREFIX = "\x00"
+POLL_INTERVAL_SECONDS = 0.1
 SPECIAL_KEY_PREFIXES = ("\x00", "\xe0")
 
 
@@ -36,6 +38,17 @@ def read_key():
         return SPECIAL_KEY_PREFIX + msvcrt.getwch()
 
     return key
+
+
+def read_key_unless(should_stop_waiting):
+    """Returns the next key, or None as soon as should_stop_waiting() is true before a key is pressed."""
+    while not msvcrt.kbhit():
+        if should_stop_waiting():
+            return None
+
+        time.sleep(POLL_INTERVAL_SECONDS)
+
+    return read_key()
 
 
 def is_typed_character(key):

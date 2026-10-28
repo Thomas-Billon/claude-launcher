@@ -223,6 +223,16 @@ class StaleHistoryLinkTest(WorktreeMenuTestCase):
         self.assertTrue(repo_history.is_dir())
 
 
+class FakeFetch:
+    """Stands for the background fetch process, ended or not."""
+
+    def __init__(self, has_ended):
+        self.has_ended = has_ended
+
+    def poll(self):
+        return 0 if self.has_ended else None
+
+
 class BranchPickerTestCase(WorktreesTestCase):
     def setUp(self):
         super().setUp()
@@ -232,11 +242,11 @@ class BranchPickerTestCase(WorktreesTestCase):
         self.clone = clone(self.repo, self.root / "clone")
         worktrees.create_worktree(self.clone, "busy", "master")
 
-    def open_picker(self, *favorites):
+    def open_picker(self, *favorites, fetch=None):
         for branch in favorites:
             worktrees_state.toggle_favorite_branch(self.clone, branch)
 
-        return BranchPicker(self.clone, [])
+        return BranchPicker(self.clone, [], fetch or FakeFetch(has_ended=True))
 
     def layout(self, picker):
         return [describe(item) for item in picker.selection.items]
@@ -344,6 +354,27 @@ class BranchFilterTest(BranchPickerTestCase):
         self.assertEqual(self.layout(picker), ["Branches", *ALL_BRANCHES])
 
         self.assertIs(picker.handle_key(Key.ESC), BACK)
+
+
+class BranchRefreshTest(BranchPickerTestCase):
+    def test_branches_are_listed_again_once_the_fetch_ends(self):
+        fetch = FakeFetch(has_ended=False)
+        picker = self.open_picker(fetch=fetch)
+        self.select(picker, "origin/stage", in_favorites=False)
+        run(self.repo, "branch", "fix/new")
+        run(self.clone, "fetch", "--quiet")
+
+        self.assertFalse(picker.has_fetch_ended())
+        fetch.has_ended = True
+        self.assertTrue(picker.has_fetch_ended())
+        picker.refresh_after_fetch()
+
+        self.assertEqual(self.layout(picker), ["Branches", "master", "origin/dev", "origin/fix/new", "origin/release/test", "origin/stage"])
+        self.assertEqual(picker.selection.selected, "origin/stage")
+        self.assertFalse(picker.has_fetch_ended())
+
+    def test_a_fetch_ended_before_the_opening_never_refreshes(self):
+        self.assertFalse(self.open_picker().has_fetch_ended())
 
 
 class BranchPickTest(BranchPickerTestCase):

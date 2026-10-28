@@ -18,6 +18,10 @@ def setUpModule():
     read_key_patch = patch("launcher.worktree_menu.read_key", side_effect=AssertionError("Unexpected key read"))
     read_key_patch.start()
     unittest.addModuleCleanup(read_key_patch.stop)
+    # INFO: A background fetch would outlive the test and its temp folder
+    fetch_patch = patch("launcher.worktrees.start_fetch_prune")
+    fetch_patch.start()
+    unittest.addModuleCleanup(fetch_patch.stop)
 
 
 def describe(item):
@@ -137,28 +141,19 @@ class MergedOnOpeningTest(WorktreeMenuTestCase):
     def listed_worktree(self, menu):
         return next(item for item in menu.selection.items if isinstance(item, worktrees.Worktree))
 
-    def test_opening_fetches_and_marks_the_merged_worktree(self):
+    def test_opening_shows_the_merged_worktree_of_the_last_fetch(self):
+        run(self.clone, "fetch", "--quiet", "--prune")
+
         worktree = self.listed_worktree(self.open_menu(self.clone))
 
         self.assertTrue(worktree.is_merged)
         self.assertEqual(entry_secondary_label(worktree), "from feature/pr · merged")
 
-    def test_failed_fetch_only_skips_the_merged_detection(self):
-        # INFO: The gone state is already known locally, only the fetch of the opening fails
-        run(self.clone, "fetch", "--quiet", "--prune")
-        run(self.clone, "remote", "set-url", "origin", str(self.root / "no-such-remote"))
-
+    def test_opening_starts_a_fetch_for_the_next_one(self):
         worktree = self.listed_worktree(self.open_menu(self.clone))
 
-        self.assertEqual(worktree.name, "merged-one")
         self.assertFalse(worktree.is_merged)
-
-    def test_fetch_timeout_only_skips_the_merged_detection(self):
-        with patch("launcher.worktrees.fetch_prune", return_value=False) as fetch_prune:
-            worktree = self.listed_worktree(self.open_menu(self.clone))
-
-        fetch_prune.assert_called_once_with(self.clone)
-        self.assertFalse(worktree.is_merged)
+        worktrees.start_fetch_prune.assert_called_with(self.clone)
 
 
 class AddWorktreeTest(WorktreeMenuTestCase):

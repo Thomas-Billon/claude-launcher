@@ -231,35 +231,28 @@ class MergedTest(WorktreesTestCase):
         # INFO: The PR branch is merged then deleted on the remote
         run(self.repo, "branch", "--quiet", "-D", "feature/pr")
 
-    def merged_names(self, detects_merged=True):
-        return [worktree.name for worktree in worktrees.load_worktrees(self.clone, detects_merged) if worktree.is_merged]
+    def merged_names(self):
+        return [worktree.name for worktree in worktrees.load_worktrees(self.clone) if worktree.is_merged]
+
+    def fetch_prune(self):
+        process = worktrees.start_fetch_prune(self.clone)
+        process.wait(timeout=30)
+
+        return process.returncode
 
     def test_gone_upstream_of_the_origin_marks_the_worktree_merged(self):
-        self.assertTrue(worktrees.fetch_prune(self.clone))
+        self.assertEqual(self.fetch_prune(), 0)
 
         self.assertEqual(self.merged_names(), ["merged-one"])
 
     def test_nothing_is_merged_before_the_fetch(self):
         self.assertEqual(self.merged_names(), [])
 
-    def test_merged_detection_can_be_skipped(self):
-        worktrees.fetch_prune(self.clone)
-
-        self.assertEqual(self.merged_names(detects_merged=False), [])
-
-    def test_failed_fetch_returns_false(self):
+    def test_failed_fetch_keeps_the_known_state(self):
         run(self.clone, "remote", "set-url", "origin", str(self.root / "no-such-remote"))
 
-        self.assertFalse(worktrees.fetch_prune(self.clone))
-
-    def test_fetch_timeout_returns_false(self):
-        with patch("launcher.git_repo.run_command", side_effect=subprocess.TimeoutExpired("git", 1)) as run_command:
-            self.assertFalse(worktrees.fetch_prune(self.clone))
-
-        command, _, timeout = run_command.call_args.args
-        self.assertIn("fetch", command)
-        self.assertIn("--prune", command)
-        self.assertIsNotNone(timeout)
+        self.assertNotEqual(self.fetch_prune(), 0)
+        self.assertEqual(self.merged_names(), [])
 
 
 class OrphanFolderTest(WorktreesTestCase):

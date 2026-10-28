@@ -175,8 +175,9 @@ class WorktreeMenu:
         self.session_index = SESSION_MODES.index(session)
         self.message = None
 
-        detects_merged = worktrees.fetch_prune(repo)
-        worktree_list = worktrees.load_worktrees(repo, detects_merged=detects_merged)
+        worktree_list = worktrees.load_worktrees(repo)
+        # INFO: A fetch takes seconds on some remotes, the merged markers it changes show at the next opening
+        worktrees.start_fetch_prune(repo)
         history.remove_stale_links(account.config_dir, repo, worktrees.list_registered_paths(repo))
         items = [NO_WORKTREE, *([SEPARATOR, *worktree_list] if worktree_list else []), SEPARATOR, ADD_WORKTREE]
         # INFO: No worktree is highlighted first, so that a double Enter launches in the main folder as before worktrees

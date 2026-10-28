@@ -16,14 +16,16 @@ UPSTREAM_BRANCH = "@{u}"
 BASE_BRANCH = "upstream/HEAD"
 
 
-def run_command(command, cwd, timeout=None):
+def build_environment():
     # INFO: GIT_TERMINAL_PROMPT=0 makes git fail instead of hanging on a credential prompt
-    environment = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
+    return {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
 
+
+def run_command(command, cwd, timeout=None):
     with subprocess.Popen(
         command,
         cwd=cwd,
-        env=environment,
+        env=build_environment(),
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -42,6 +44,19 @@ def run_command(command, cwd, timeout=None):
 
 def run_git(repo, *arguments, timeout=None):
     return run_command(["git", *arguments], repo, timeout)
+
+
+def start_git(repo, *arguments):
+    """Starts git without waiting for it, detached from the console so that it outlives the launcher. Returns its process."""
+    return subprocess.Popen(
+        ["git", *arguments],
+        cwd=repo,
+        env=build_environment(),
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP,
+    )
 
 
 def succeeds(repo, *arguments, timeout=None):

@@ -9,7 +9,6 @@ never pushes anything.
 """
 
 import secrets
-import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -176,12 +175,10 @@ def is_existing_branch(repo, branch):
     return branch_exists(repo, branch) or remote_branch_exists(repo, branch)
 
 
-def fetch_prune(repo):
-    """Returns whether git fetch --prune succeeded within a short timeout."""
-    try:
-        return succeeds(repo, "fetch", "--prune", "--quiet", timeout=git_repo.FETCH_TIMEOUT_SECONDS)
-    except subprocess.TimeoutExpired:
-        return False
+def start_fetch_prune(repo):
+    """Starts git fetch --prune in the background, so that the next listing sees the branches deleted on the remote.
+    Returns its process."""
+    return git_repo.start_git(repo, "fetch", "--prune", "--quiet")
 
 
 def read_origin(repo, branch):
@@ -198,8 +195,9 @@ def is_gone(repo, branch):
     return result.returncode == 0 and result.stdout.strip() == "[gone]"
 
 
-def load_worktrees(repo, detects_merged=False):
-    """Returns the worktrees of the repo sorted by name, after forgetting those git no longer knows."""
+def load_worktrees(repo):
+    """Returns the worktrees of the repo sorted by name, after forgetting those git no longer knows.
+    A worktree is merged when the remote branch of its origin was deleted, as of the last fetch."""
     succeeds(repo, "worktree", "prune")
     registered = list_registered_worktrees(repo)
     repo_dir = find_repo_dir(repo)
@@ -211,7 +209,7 @@ def load_worktrees(repo, detects_merged=False):
             continue
 
         origin_branch = read_origin(repo, branch)
-        is_merged = detects_merged and origin_branch is not None and is_gone(repo, origin_branch)
+        is_merged = origin_branch is not None and is_gone(repo, origin_branch)
         worktrees.append(Worktree(path.name, repo_dir / path.name, repo, origin_branch, is_merged))
 
     return sorted(worktrees, key=lambda worktree: worktree.name.casefold())

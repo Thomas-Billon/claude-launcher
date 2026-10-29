@@ -28,7 +28,8 @@ def run_command(command, cwd, timeout=None):
         env=build_environment(),
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        text=True,
+        # INFO: Git writes its output in UTF-8, whatever the Windows code page
+        encoding="utf-8",
         errors="replace",
     ) as process:
         try:

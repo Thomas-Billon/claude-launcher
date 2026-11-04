@@ -287,6 +287,7 @@ class WorktreeMenu:
         if origin_branch is BACK:
             return None
 
+        render_screen(self.screen_lines, self.selection.render, WORKTREE_HELP_TEXT, Message(f"Fetching {origin_branch}...", CYAN))
         worktree = worktrees.create_worktree(self.repo, name, origin_branch)
 
         if worktree is None:

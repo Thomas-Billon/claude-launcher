@@ -9,6 +9,7 @@ never pushes anything.
 """
 
 import secrets
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -108,6 +109,44 @@ def validate_worktree_name(repo, name):
     return None
 
 
+def read_upstream_ref(repo, branch):
+    """Returns the full name of the remote branch the branch tracks (e.g. refs/remotes/origin/master), or None."""
+    result = run_git(repo, "rev-parse", "--symbolic-full-name", f"{branch}@{{upstream}}")
+
+    return result.stdout.strip() if result.returncode == 0 else None
+
+
+def fetch_upstream(repo, branch):
+    """Fetches the remote branch the branch tracks. A failed fetch leaves the last known remote branch."""
+    remote = run_git(repo, "config", f"branch.{branch}.remote").stdout.strip()
+    remote_branch = run_git(repo, "config", f"branch.{branch}.merge").stdout.strip()
+
+    if not remote or not remote_branch:
+        return
+
+    try:
+        succeeds(repo, "fetch", "--quiet", remote, remote_branch, timeout=git_repo.FETCH_TIMEOUT_SECONDS)
+    except subprocess.TimeoutExpired:
+        pass
+
+
+def find_start_point(repo, branch):
+    """Returns where a worktree of the branch starts: the branch, fast-forwarded to its remote branch when it is behind it.
+    A branch checked out in a folder of the repo is left as is, the worktree then starts from its remote branch."""
+    upstream_ref = read_upstream_ref(repo, branch)
+    local_ref = f"{LOCAL_BRANCHES_PREFIX}{branch}"
+
+    if upstream_ref is None or not succeeds(repo, "merge-base", "--is-ancestor", local_ref, upstream_ref):
+        return branch
+
+    checked_out_branches = {checked_out_branch for _, checked_out_branch in list_registered_worktrees(repo)}
+
+    if branch not in checked_out_branches and succeeds(repo, "update-ref", local_ref, upstream_ref):
+        return branch
+
+    return upstream_ref
+
+
 def create_worktree(repo, name, origin_branch):
     """Returns the created worktree, or None when git fails."""
     if not branch_exists(repo, origin_branch) and remote_branch_exists(repo, origin_branch):
@@ -119,6 +158,8 @@ def create_worktree(repo, name, origin_branch):
 
         origin_branch = local_branch
 
+    fetch_upstream(repo, origin_branch)
+    start_point = find_start_point(repo, origin_branch)
     repo_id = worktrees_state.load_repo_id(repo)
     is_new_repo = repo_id is None
 
@@ -127,8 +168,11 @@ def create_worktree(repo, name, origin_branch):
 
     worktree = Worktree(name, WORKTREES_DIR / repo_id / name, repo, origin_branch)
 
-    if not succeeds(repo, "worktree", "add", "--quiet", "--track", "-b", worktree.branch, str(worktree.path), origin_branch):
+    if not succeeds(repo, "worktree", "add", "--quiet", "--no-track", "-b", worktree.branch, str(worktree.path), start_point):
         return None
+
+    # INFO: The origin stays the local branch, even when the worktree starts from its remote branch
+    succeeds(repo, "branch", "--quiet", "--set-upstream-to", origin_branch, worktree.branch)
 
     if is_new_repo:
         worktrees_state.save_repo_id(repo, repo_id)

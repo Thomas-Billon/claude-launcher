@@ -8,7 +8,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from launcher import worktrees, worktrees_state
-from tests.git_helpers import clone, commit_on_branch, make_repo, read, read_upstream, run
+from tests.git_helpers import clone, commit_file, commit_on_branch, make_repo, read, read_upstream, run
 
 
 class WorktreesTestCase(unittest.TestCase):
@@ -125,6 +125,51 @@ class RemoteOriginTest(WorktreesTestCase):
         self.assertEqual(worktree.origin_branch, "feature/handoff")
         self.assertEqual(worktree.branch, "temp/resume")
         self.assertEqual((worktree.path / "progress.txt").read_text(), "half done")
+
+
+class RemoteUpdateTest(WorktreesTestCase):
+    def setUp(self):
+        super().setUp()
+        self.clone = clone(self.repo, self.root / "clone")
+        run(self.clone, "branch", "--quiet", "--track", "dev", "origin/dev")
+
+    def test_origin_behind_its_remote_branch_is_fast_forwarded(self):
+        commit_on_branch(self.repo, "dev", "pushed.txt", "from remote")
+
+        worktree = worktrees.create_worktree(self.clone, "behind", "dev")
+
+        self.assertEqual((worktree.path / "pushed.txt").read_text(), "from remote")
+        self.assertEqual(read(self.clone, "rev-parse", "dev"), read(self.repo, "rev-parse", "dev"))
+        self.assertEqual(read_upstream(self.clone, "temp/behind"), "dev")
+
+    def test_checked_out_origin_is_left_as_is_and_the_worktree_starts_from_its_remote_branch(self):
+        master_before = read(self.clone, "rev-parse", "master")
+        commit_file(self.repo, "pushed.txt", "from remote")
+
+        worktree = worktrees.create_worktree(self.clone, "on-master", "master")
+
+        self.assertEqual((worktree.path / "pushed.txt").read_text(), "from remote")
+        self.assertEqual(read(self.clone, "rev-parse", "master"), master_before)
+        self.assertEqual(read_upstream(self.clone, "temp/on-master"), "master")
+
+    def test_diverged_origin_keeps_its_local_commits(self):
+        commit_on_branch(self.repo, "dev", "pushed.txt", "from remote")
+        commit_on_branch(self.clone, "dev", "local.txt", "not pushed")
+        dev_before = read(self.clone, "rev-parse", "dev")
+
+        worktree = worktrees.create_worktree(self.clone, "diverged", "dev")
+
+        self.assertEqual((worktree.path / "local.txt").read_text(), "not pushed")
+        self.assertFalse((worktree.path / "pushed.txt").exists())
+        self.assertEqual(read(self.clone, "rev-parse", "dev"), dev_before)
+
+    def test_failed_fetch_starts_from_the_local_branch(self):
+        run(self.clone, "remote", "set-url", "origin", str(self.root / "no-such-remote"))
+
+        worktree = worktrees.create_worktree(self.clone, "offline", "dev")
+
+        self.assertIsNotNone(worktree)
+        self.assertEqual(read_upstream(self.clone, "temp/offline"), "dev")
 
 
 class FailedCreationTest(WorktreesTestCase):

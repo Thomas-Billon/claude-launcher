@@ -4,8 +4,9 @@ Git worktrees where Claude Code works beside the main folder of a repo, without 
 Every worktree of a repo lives in ~/.claude-worktrees/<id>/<name>/, the id being generated
 once per repo (see worktrees_state.py), and works on its own temp/<name> branch created from
 a branch of the repo, which becomes its upstream: the origin of a worktree is read from git, as
-the worktrees themselves. Finishing or deleting a worktree is done outside the launcher, which
-never pushes anything.
+the worktrees themselves. Once its PR is opened, the PR branch is recorded in the pr-branch key of
+the branch config. Finishing or deleting a worktree is done outside the launcher, which never
+pushes anything.
 """
 
 import secrets
@@ -21,6 +22,8 @@ from launcher.paths import WORKTREES_DIR
 TEMP_BRANCH_PREFIX = "temp/"
 LOCAL_BRANCHES_PREFIX = "refs/heads/"
 REMOTE_BRANCHES_PREFIX = "refs/remotes/"
+# INFO: Set by the worktree-finish skill on temp/<name> when it opens the PR, the upstream staying the origin
+PR_BRANCH_CONFIG_KEY = "pr-branch"
 
 
 @dataclass(frozen=True)
@@ -239,9 +242,16 @@ def is_gone(repo, branch):
     return result.returncode == 0 and result.stdout.strip() == "[gone]"
 
 
+def read_pr_branch(repo, branch):
+    """Returns the PR branch recorded on the branch once its PR is opened, or None."""
+    result = run_git(repo, "config", f"branch.{branch}.{PR_BRANCH_CONFIG_KEY}")
+
+    return result.stdout.strip() if result.returncode == 0 else None
+
+
 def load_worktrees(repo):
     """Returns the worktrees of the repo sorted by name, after forgetting those git no longer knows.
-    A worktree is merged when the remote branch of its origin was deleted, as of the last fetch."""
+    A worktree is merged when the remote branch of its PR branch was deleted, as of the last fetch."""
     succeeds(repo, "worktree", "prune")
     registered = list_registered_worktrees(repo)
     repo_dir = find_repo_dir(repo)
@@ -253,7 +263,9 @@ def load_worktrees(repo):
             continue
 
         origin_branch = read_origin(repo, branch)
-        is_merged = origin_branch is not None and is_gone(repo, origin_branch)
+        # INFO: Older worktrees have no recorded PR branch, their upstream became the PR branch instead
+        pr_branch = read_pr_branch(repo, branch) or origin_branch
+        is_merged = pr_branch is not None and is_gone(repo, pr_branch)
         worktrees.append(Worktree(path.name, repo_dir / path.name, repo, origin_branch, is_merged))
 
     return sorted(worktrees, key=lambda worktree: worktree.name.casefold())

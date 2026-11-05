@@ -273,8 +273,14 @@ class MergedTest(WorktreesTestCase):
         worktrees.create_worktree(self.clone, "open-one", "origin/feature/open")
         run(self.clone, "branch", "--quiet", "local-only")
         worktrees.create_worktree(self.clone, "local-one", "local-only")
+        self.create_with_pr_branch("recorded-merged", "local-only", "feature/pr")
+        self.create_with_pr_branch("recorded-open", "feature/pr", "feature/open")
         # INFO: The PR branch is merged then deleted on the remote
         run(self.repo, "branch", "--quiet", "-D", "feature/pr")
+
+    def create_with_pr_branch(self, name, origin_branch, pr_branch):
+        worktree = worktrees.create_worktree(self.clone, name, origin_branch)
+        run(self.clone, "config", f"branch.{worktree.branch}.pr-branch", pr_branch)
 
     def merged_names(self):
         return [worktree.name for worktree in worktrees.load_worktrees(self.clone) if worktree.is_merged]
@@ -285,10 +291,25 @@ class MergedTest(WorktreesTestCase):
 
         return process.returncode
 
-    def test_gone_upstream_of_the_origin_marks_the_worktree_merged(self):
+    def test_gone_pr_branch_marks_the_worktree_merged(self):
         self.assertEqual(self.fetch_prune(), 0)
 
-        self.assertEqual(self.merged_names(), ["merged-one"])
+        self.assertIn("recorded-merged", self.merged_names())
+
+    def test_pr_branch_wins_over_a_gone_origin(self):
+        self.assertEqual(self.fetch_prune(), 0)
+
+        self.assertNotIn("recorded-open", self.merged_names())
+
+    def test_gone_origin_without_pr_branch_marks_the_worktree_merged(self):
+        self.assertEqual(self.fetch_prune(), 0)
+
+        self.assertEqual(self.merged_names(), ["merged-one", "recorded-merged"])
+
+    def test_pr_branch_keeps_the_origin_shown(self):
+        worktree = next(worktree for worktree in worktrees.load_worktrees(self.clone) if worktree.name == "recorded-merged")
+
+        self.assertEqual(worktree.origin_branch, "local-only")
 
     def test_nothing_is_merged_before_the_fetch(self):
         self.assertEqual(self.merged_names(), [])

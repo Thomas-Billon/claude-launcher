@@ -17,6 +17,10 @@ def get_history_dir(config_dir, folder):
     return config_dir / "projects" / encode_path(folder)
 
 
+def get_conversation_file(config_dir, folder, session_id):
+    return get_history_dir(config_dir, folder) / f"{session_id}.jsonl"
+
+
 def link_worktree_history(config_dir, worktree_path, repo):
     """Returns False when the junction could not be created."""
     link = get_history_dir(config_dir, worktree_path)

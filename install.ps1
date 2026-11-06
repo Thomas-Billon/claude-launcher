@@ -1,7 +1,8 @@
 ﻿# INFO: Installs the launcher on this machine:
 # 1. the "Claude Code" Start menu shortcut, pointing to the launcher of this repo (run again if the repo is moved).
 #    With Windows Terminal, the launcher runs in a "Claude Code" profile, added through a fragment, and the shortcut
-#    opens it either as a new tab of the window dedicated to the launcher or in a new window, as chosen by the user;
+#    opens it either as a new tab of the window dedicated to the launcher or in a new window, as chosen by the user.
+#    This choice is saved in config.json too, the launcher opens the restored sessions the same way;
 # 2. the shared skills repo: an existing local one, a new one created from the base repo template, or none.
 #    Its path is saved in config.json (not versioned), which the launcher reads to sync it;
 # 3. the global CLAUDE.md, turned into a relay to the CLAUDE.md of the skills repo;
@@ -68,7 +69,7 @@ function Find-RegularExecutable($name) {
     return $executable.Source
 }
 
-function Install-Shortcut {
+function Install-Shortcut($window) {
     $programsDirectory = [Environment]::GetFolderPath('Programs')
 
     # INFO: Empty when the Start menu folder cannot be resolved, e.g. with USERPROFILE redirected to another folder
@@ -80,7 +81,6 @@ function Install-Shortcut {
     $shortcutPath = Join-Path $programsDirectory 'Claude Code.lnk'
     $windowsTerminal = Get-Command wt -ErrorAction SilentlyContinue
     $pythonw = Find-RegularExecutable 'pythonw'
-    $window = if ($windowsTerminal) { Read-ShortcutWindow }
 
     # INFO: CreateShortcut loads the existing shortcut, so a hotkey set by the user in its properties is kept
     $shortcut = (New-Object -ComObject WScript.Shell).CreateShortcut($shortcutPath)
@@ -130,16 +130,29 @@ function Install-TerminalProfile {
 function Test-KeepCurrentConfig {
     if (-not (Test-Path $configPath)) { return $false }
 
-    try {
-        $currentRepo = (Get-Content $configPath -Raw | ConvertFrom-Json).skills_repo
-    } catch {
-        $currentRepo = $null
-    }
-
+    $currentRepo = (Read-Config).skills_repo
     $currentSetting = if ($currentRepo) { $currentRepo } else { 'disabled' }
     Write-Host "Current shared skills repo: $currentSetting"
 
     return Read-YesNo 'Keep this setting?'
+}
+
+function Read-Config {
+    try {
+        return Get-Content $configPath -Raw | ConvertFrom-Json
+    } catch {
+        return $null
+    }
+}
+
+function Set-ConfigValue($key, $value) {
+    $config = Read-Config
+
+    if (-not $config) { $config = [pscustomobject]@{} }
+
+    $config | Add-Member -NotePropertyName $key -NotePropertyValue $value -Force
+    # INFO: WriteAllText writes UTF-8 without BOM, which Python's json module would reject
+    [IO.File]::WriteAllText($configPath, ($config | ConvertTo-Json))
 }
 
 function Select-ExistingRepo {
@@ -220,8 +233,7 @@ function Select-SkillsRepo {
 }
 
 function Save-Config($skillsRepo) {
-    # INFO: WriteAllText writes UTF-8 without BOM, which Python's json module would reject
-    [IO.File]::WriteAllText($configPath, (@{ skills_repo = $skillsRepo } | ConvertTo-Json))
+    Set-ConfigValue 'skills_repo' $skillsRepo
 
     Write-Host "Config saved: $configPath"
 }
@@ -305,14 +317,18 @@ function Invoke-SkillsInstall($repoPath) {
 
 Test-Prerequisites
 Install-TerminalProfile
-Install-Shortcut
+$terminalWindow = if (Get-Command wt -ErrorAction SilentlyContinue) { Read-ShortcutWindow }
+Install-Shortcut $terminalWindow
 
 if (Test-KeepCurrentConfig) {
+    if ($terminalWindow) { Set-ConfigValue 'terminal_window' $terminalWindow }
     return
 }
 
 $skillsRepo = Select-SkillsRepo
 Save-Config $skillsRepo
+
+if ($terminalWindow) { Set-ConfigValue 'terminal_window' $terminalWindow }
 
 if ($skillsRepo) {
     Sync-GlobalClaudeMd $skillsRepo

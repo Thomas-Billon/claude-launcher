@@ -5,16 +5,23 @@ Steps, each one adding its line to the header (modules in the launcher folder):
 1. Repo syncs (repo_sync.py): the launcher repo, then the shared skills repo, are
    synced with their remote. When new launcher commits are pulled, the launcher
    restarts itself to run them.
-2. Account (account_menu.py). Claude Code asks for the login of a logged out
+2. Restore (restore_menu.py), only when sessions left open at the previous close can
+   be restored: the first one resumes in the current tab, the others open in new tabs
+   or windows, and the launcher ends there. Choosing to start a new session goes on
+   to the account menu.
+3. Account (account_menu.py). Claude Code asks for the login of a logged out
    account itself, after which an account already in the list is reported.
-3. Folder (folder_menu.py) where `claude` is launched, and session mode.
-4. Worktree (worktree_menu.py), only when the folder is in a git repo: its main
+4. Folder (folder_menu.py) where `claude` is launched, and session mode.
+5. Worktree (worktree_menu.py), only when the folder is in a git repo: its main
    folder, or a worktree where `claude` is launched instead.
 
-The -a argument skips the account menu, and the folder and worktree menus too along with -d.
+The -a argument skips the restore screen and the account menu, and the folder and worktree menus too along with -d.
 Otherwise the folder list starts from the -d argument, else from the default
 folder of the account (launcher_state.py), else from the user's home directory.
 Arguments after -- are passed to Claude Code.
+
+The hidden --restore-session argument, used by the tabs a restore opens, resumes one
+session by its entry id: it skips the repo syncs and the menus.
 """
 
 import argparse
@@ -25,8 +32,9 @@ import sys
 from collections import namedtuple
 from pathlib import Path
 
-from launcher import accounts, history, launcher_state, repo_sync, worktrees
+from launcher import accounts, history, launcher_state, repo_sync, session_restore, sessions_state, worktrees
 from launcher.account_menu import prompt_for_account
+from launcher.restore_menu import last_message_label, prompt_for_restore
 from launcher.folder_menu import CONTINUE_SESSION, NEW_SESSION, get_start_dir, prompt_for_launch_folder, session_header_line
 from launcher.worktree_menu import NO_WORKTREE, prompt_for_worktree, worktree_header_line
 from launcher.terminal_ui import (
@@ -50,6 +58,9 @@ RESTART_HEADER_VARIABLE = "CLAUDE_LAUNCHER_RESTART_HEADER"
 
 # INFO: When needs_restart is set, header_lines only holds the launcher line, passed on to the restarted launcher
 SyncResult = namedtuple("SyncResult", "header_lines needs_restart")
+
+# INFO: Either cancelled, or sessions to restore, or the account, folder, session mode and worktree of a new session
+LaunchChoice = namedtuple("LaunchChoice", "is_cancelled restored_sessions account folder session worktree")
 
 
 def split_claude_arguments(command_line):
@@ -79,6 +90,7 @@ def parse_arguments():
         help="Folder to launch Claude Code in with -a, else directory to start the folder menu from"
         " (default: the account default folder, then the home directory)",
     )
+    parser.add_argument(session_restore.RESTORE_SESSION_ARGUMENT, help=argparse.SUPPRESS)
     arguments = parser.parse_args(launcher_arguments)
     arguments.claude_arguments = claude_arguments
 
@@ -190,10 +202,7 @@ def pick_launch_target(argument_dir, argument_account, header_lines):
         if account is None:
             return None, None, None, None
 
-    lines = [*header_lines, accounts.account_header_line(account), HeaderLine("Directory", folder, GREEN)]
-
-    if worktree is not None:
-        lines.append(worktree_header_line(worktree, GREEN))
+    lines = build_launch_header(header_lines, account, folder, worktree)
 
     if session is not NEW_SESSION:
         lines.append(session_header_line(session, GREEN))
@@ -201,6 +210,15 @@ def pick_launch_target(argument_dir, argument_account, header_lines):
     render_screen(lines)
 
     return account, folder, session, worktree
+
+
+def build_launch_header(header_lines, account, folder, worktree):
+    lines = [*header_lines, accounts.account_header_line(account), HeaderLine("Directory", folder, GREEN)]
+
+    if worktree is not None:
+        lines.append(worktree_header_line(worktree, GREEN))
+
+    return lines
 
 
 def cancel():
@@ -220,8 +238,9 @@ def build_session_arguments(account, session, worktree):
     return ["--resume", session_id] if session_id is not None else []
 
 
-def launch_claude_code(account, folder, worktree, claude_arguments):
-    """Returns the exit code of Claude Code."""
+def launch_claude_code(account, folder, worktree, claude_arguments, entry_id=None):
+    """Returns the exit code of Claude Code. The session is registered while Claude Code runs, under entry_id for a
+    restored session, under a new entry otherwise."""
     failed_links = accounts.prepare_account_dir(account.config_dir)
 
     if failed_links:
@@ -238,7 +257,100 @@ def launch_claude_code(account, folder, worktree, claude_arguments):
     set_title(f"{title} · {worktree.name}" if worktree is not None else title)
     os.chdir(worktree.path if worktree is not None else folder)
 
-    return subprocess.run(accounts.build_launch_command(claude_arguments), env=accounts.build_environment(account)).returncode
+    if entry_id is None:
+        entry_id = sessions_state.register_session(account, folder, worktree)
+
+    environment = {**accounts.build_environment(account), sessions_state.ENTRY_VARIABLE: entry_id}
+
+    try:
+        return subprocess.run(accounts.build_launch_command(claude_arguments), env=environment).returncode
+    finally:
+        sessions_state.unregister_session(entry_id)
+
+
+def offer_restore(header_lines):
+    """Offers the sessions left open at the previous close. Returns the header lines with the rejected sessions, and
+    the sessions to restore (an empty list to start a new session, QUIT on Esc or Ctrl+C). The sessions not chosen are
+    forgotten."""
+    restorable_sessions, rejected_sessions = session_restore.find_restorable_sessions()
+    header_lines = [*header_lines, *(session_restore.rejection_header_line(session) for session in rejected_sessions)]
+
+    if not restorable_sessions:
+        return header_lines, []
+
+    chosen_sessions = prompt_for_restore(header_lines, restorable_sessions)
+
+    if chosen_sessions is QUIT:
+        return header_lines, QUIT
+
+    forget_unchosen_sessions(restorable_sessions, chosen_sessions)
+
+    return header_lines, chosen_sessions
+
+
+def forget_unchosen_sessions(restorable_sessions, chosen_sessions):
+    chosen_entry_ids = {session.entry_id for session in chosen_sessions}
+    sessions_state.forget_sessions([session.entry_id for session in restorable_sessions if session.entry_id not in chosen_entry_ids])
+
+
+def launch_restored_session(session, claude_arguments):
+    lines = build_launch_header([], session.account, session.folder, session.worktree)
+    lines.append(HeaderLine("Session", f"resume the conversation of {last_message_label(session)}", GREEN))
+    render_screen(lines)
+
+    return launch_claude_code(
+        session.account,
+        session.folder,
+        session.worktree,
+        ["--resume", session.session_id, *claude_arguments],
+        session.entry_id,
+    )
+
+
+def restore_sessions(sessions, claude_arguments):
+    """Resumes the first session in the current tab and opens the others in new tabs. Returns the exit code of Claude
+    Code."""
+    if not session_restore.is_windows_terminal():
+        sessions_state.forget_sessions([session.entry_id for session in sessions[1:]])
+        sessions = sessions[:1]
+
+    sessions_state.claim_sessions([session.entry_id for session in sessions])
+
+    if sessions[1:]:
+        session_restore.open_in_new_tabs(sessions[1:])
+
+    return launch_restored_session(sessions[0], claude_arguments)
+
+
+def restore_session_in_tab(entry_id, claude_arguments):
+    """Resumes the session of the entry without any menu, in a tab opened by a restore. Returns the exit code."""
+    session = session_restore.load_restorable_session(entry_id)
+
+    if session is None:
+        print(colorize("The session to restore no longer exists.", RED))
+
+        return 1
+
+    sessions_state.claim_sessions([entry_id])
+
+    return launch_restored_session(session, claude_arguments)
+
+
+def choose_launch(argument_dir, argument_account, header_lines):
+    """Returns whether the user cancelled, the sessions to restore, and the account, folder, session mode and worktree
+    to launch. The sessions to restore are empty when a new session is launched, the account is None when restoring."""
+    if argument_account is None:
+        header_lines, offered_sessions = offer_restore(header_lines)
+
+        if offered_sessions is QUIT:
+            return LaunchChoice(True, [], None, None, None, None)
+
+        if offered_sessions:
+            return LaunchChoice(False, offered_sessions, None, None, None, None)
+
+    account, folder, session, worktree = pick_launch_target(argument_dir, argument_account, header_lines)
+
+    return LaunchChoice(account is None, [], account, folder, session, worktree)
 
 
 def report_duplicate(account):
@@ -269,6 +381,9 @@ def main():
 
         return 1
 
+    if arguments.restore_session is not None:
+        return restore_session_in_tab(arguments.restore_session, arguments.claude_arguments)
+
     set_title("Claude Code Launcher")
     clear_screen()
     hide_cursor()
@@ -279,18 +394,22 @@ def main():
         if sync_result.needs_restart:
             return restart(sync_result.header_lines)
 
-        account, folder, session, worktree = pick_launch_target(argument_dir, argument_account, sync_result.header_lines)
+        launch_choice = choose_launch(argument_dir, argument_account, sync_result.header_lines)
     except KeyboardInterrupt:
-        # INFO: Raised by Ctrl+C in a question of the repo syncs or of the account menu
-        account, folder, session, worktree = None, None, None, None
+        # INFO: Raised by Ctrl+C in a question of the repo syncs, of the restore menu or of the account menu
+        return cancel()
     finally:
         show_cursor()
 
-    if account is None:
+    if launch_choice.is_cancelled:
         return cancel()
 
-    claude_arguments = [*build_session_arguments(account, session, worktree), *arguments.claude_arguments]
-    exit_code = launch_claude_code(account, folder, worktree, claude_arguments)
+    if launch_choice.restored_sessions:
+        return restore_sessions(launch_choice.restored_sessions, arguments.claude_arguments)
+
+    account, worktree = launch_choice.account, launch_choice.worktree
+    claude_arguments = [*build_session_arguments(account, launch_choice.session, worktree), *arguments.claude_arguments]
+    exit_code = launch_claude_code(account, launch_choice.folder, worktree, claude_arguments)
     report_duplicate(account)
 
     return exit_code

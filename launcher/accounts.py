@@ -19,12 +19,14 @@ import os
 import secrets
 import shutil
 import subprocess
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
 from launcher import launcher_state
 from launcher.junctions import create_junction
-from launcher.paths import ACCOUNTS_DIR, SHARED_CONFIG_DIR, SHARED_SETTINGS_FILE
+from launcher.json_store import load_json
+from launcher.paths import ACCOUNTS_DIR, SESSION_HOOK_SCRIPT, SHARED_CONFIG_DIR, SHARED_SETTINGS_FILE
 from launcher.terminal_ui import GREEN, HeaderLine
 
 SHARED_DIRECTORIES = ("skills", "plugins")
@@ -66,11 +68,20 @@ def build_environment(account):
     return {**os.environ, "CLAUDE_CONFIG_DIR": str(account.config_dir)}
 
 
+def build_settings():
+    """Returns the shared settings, with the SessionStart hook of the launcher added next to their own hooks."""
+    settings = load_json(SHARED_SETTINGS_FILE)
+    hook_command = f'"{Path(sys.executable).as_posix()}" "{SESSION_HOOK_SCRIPT.as_posix()}"'
+    session_start_groups = settings.setdefault("hooks", {}).setdefault("SessionStart", [])
+    session_start_groups.append({"hooks": [{"type": "command", "command": hook_command}]})
+
+    return settings
+
+
 def build_launch_command(claude_arguments=()):
     command = [find_claude_executable()]
 
-    if SHARED_SETTINGS_FILE.is_file():
-        command.extend(["--settings", str(SHARED_SETTINGS_FILE)])
+    command.extend(["--settings", json.dumps(build_settings())])
 
     return command + list(claude_arguments)
 
@@ -96,6 +107,11 @@ def load_accounts():
     accounts = [read_account(entry, names.get(entry.name)) for entry in ACCOUNTS_DIR.iterdir() if entry.is_dir()]
 
     return sorted(accounts, key=lambda account: account.label.casefold())
+
+
+def find_account(account_id):
+    """Returns the account with this id, or None when it no longer exists."""
+    return next((account for account in load_accounts() if account.account_id == account_id), None)
 
 
 def find_accounts(query):

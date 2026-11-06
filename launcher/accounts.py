@@ -25,8 +25,8 @@ from pathlib import Path
 
 from launcher import launcher_state
 from launcher.junctions import create_junction
-from launcher.json_store import load_json
-from launcher.paths import ACCOUNTS_DIR, SESSION_HOOK_SCRIPT, SHARED_CONFIG_DIR, SHARED_SETTINGS_FILE
+from launcher.json_store import load_json, save_json
+from launcher.paths import ACCOUNTS_DIR, LAUNCH_SETTINGS_FILE, SESSION_HOOK_SCRIPT, SHARED_CONFIG_DIR, SHARED_SETTINGS_FILE
 from launcher.terminal_ui import GREEN, HeaderLine
 
 SHARED_DIRECTORIES = ("skills", "plugins")
@@ -81,7 +81,10 @@ def build_settings():
 def build_launch_command(claude_arguments=()):
     command = [find_claude_executable()]
 
-    command.extend(["--settings", json.dumps(build_settings())])
+    # INFO: Passed as a file, since inline JSON is mangled by cmd.exe when claude is a .cmd (npm install): its quotes
+    # escaped with backslashes are not understood, so a > or & of the settings becomes a redirection or a command
+    save_json(LAUNCH_SETTINGS_FILE, build_settings())
+    command.extend(["--settings", str(LAUNCH_SETTINGS_FILE)])
 
     return command + list(claude_arguments)
 

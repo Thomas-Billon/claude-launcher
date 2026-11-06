@@ -17,9 +17,12 @@ class SettingsTestCase(unittest.TestCase):
         temp_dir = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         self.addCleanup(temp_dir.cleanup)
         self.shared_settings_file = Path(temp_dir.name) / "settings.json"
-        settings_patch = patch("launcher.accounts.SHARED_SETTINGS_FILE", self.shared_settings_file)
-        settings_patch.start()
-        self.addCleanup(settings_patch.stop)
+        self.launch_settings_file = Path(temp_dir.name) / "launch_settings.json"
+
+        for name, path in (("SHARED_SETTINGS_FILE", self.shared_settings_file), ("LAUNCH_SETTINGS_FILE", self.launch_settings_file)):
+            settings_patch = patch(f"launcher.accounts.{name}", path)
+            settings_patch.start()
+            self.addCleanup(settings_patch.stop)
 
     def write_shared_settings(self, settings):
         self.shared_settings_file.write_text(json.dumps(settings), encoding="utf-8")
@@ -61,7 +64,7 @@ class SettingsTest(SettingsTestCase):
 
 
 class LaunchCommandTest(SettingsTestCase):
-    def test_settings_are_passed_as_json(self):
+    def test_settings_are_passed_as_a_file(self):
         self.write_shared_settings({"model": "opus"})
 
         with patch("launcher.accounts.find_claude_executable", return_value="claude"):
@@ -69,5 +72,6 @@ class LaunchCommandTest(SettingsTestCase):
 
         self.assertEqual(command[0], "claude")
         self.assertEqual(command[1], "--settings")
-        self.assertEqual(json.loads(command[2]), accounts.build_settings())
+        self.assertEqual(command[2], str(self.launch_settings_file))
+        self.assertEqual(json.loads(self.launch_settings_file.read_text(encoding="utf-8")), accounts.build_settings())
         self.assertEqual(command[3:], ["--resume", "session-1"])

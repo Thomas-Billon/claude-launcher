@@ -14,6 +14,8 @@ CONFIG_FILE = LAUNCHER_REPO / "config.json"
 ACCOUNTS_DIR = Path.home() / ".claude-accounts"
 STATE_FILE = ACCOUNTS_DIR / "launcher_state.json"
 SESSIONS_STATE_FILE = ACCOUNTS_DIR / "sessions_state.json"
+# INFO: Shared settings with the launcher hook added, rewritten at each launch and passed to Claude Code by its path
+LAUNCH_SETTINGS_FILE = ACCOUNTS_DIR / "launch_settings.json"
 
 WORKTREES_DIR = Path.home() / ".claude-worktrees"
 WORKTREES_STATE_FILE = WORKTREES_DIR / "worktrees_state.json"

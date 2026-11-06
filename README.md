@@ -8,6 +8,7 @@ Launcher interactif pour **Claude Code** : choix du **compte**, puis du **projet
 - 🌳 **Worktrees git** : plusieurs sessions sur un même repo, chacune sur sa branche `temp/`, sans toucher au dossier principal
 - 🪟 Titre de fenêtre `Claude Code · <compte> · <projet>`
 - 🔄 **Synchro git** du launcher et du repo de skills partagés au démarrage
+- ♻️ **Restauration des sessions** ouvertes quand un onglet, une fenêtre ou le PC a été fermé
 
 > [!WARNING]
 > **Code généré par IA** : ce repo a été écrit avec Claude Code. Il est fourni **tel quel, sans aucune garantie** : relire les scripts avant de les lancer, leur utilisation se fait **à vos risques et périls**.
@@ -30,13 +31,14 @@ Launcher interactif pour **Claude Code** : choix du **compte**, puis du **projet
 1. Signale en jaune les prérequis absents du `PATH` (`python`, `git`, `claude`), sans bloquer
 2. Avec Windows Terminal : ajoute le profil **« Claude Code »** (fragment `%LOCALAPPDATA%\Microsoft\Windows Terminal\Fragments\claude-launcher`), à recharger en redémarrant Windows Terminal s'il est ouvert
 3. Crée le raccourci **« Claude Code »** dans le menu Démarrer (remplace l'existant). Avec Windows Terminal, choix de son ouverture : **nouvel onglet** du profil dans la fenêtre [dédiée au launcher](#windows-terminal) ou **nouvelle fenêtre**. Sinon, fenêtre PowerShell
-4. Si `config.json` existe : affiche le repo de skills actuel et propose de le garder (fin du script)
-5. Sinon, choix du **repo de skills partagés** (enregistré dans `config.json`) :
+4. Avec Windows Terminal : enregistre le choix onglet / fenêtre dans `config.json` (clé `terminal_window`), à chaque lancement, que le fichier existe ou non : les autres clés sont conservées
+5. Si `config.json` existe : affiche le repo de skills actuel et propose de le garder (fin du script)
+6. Sinon, choix du **repo de skills partagés** (enregistré dans `config.json`) :
    - **Repo local existant** : saisie du chemin (vide : retour au choix)
    - **Nouveau repo** depuis le template [claude-skills-base](https://github.com/Thomas-Billon/claude-skills-base) : « Use this template » dans le navigateur, collage de l'URL, puis `git clone` en local
    - **Aucun**
-6. Avec un repo : mise en place du [`CLAUDE.md` global](#claudemd-global)
-7. Propose de lancer l'`install.ps1` du repo de skills (jonctions, relais `~/.claude/CLAUDE.md`, remote `upstream`)
+7. Avec un repo : mise en place du [`CLAUDE.md` global](#claudemd-global)
+8. Propose de lancer l'`install.ps1` du repo de skills (jonctions, relais `~/.claude/CLAUDE.md`, remote `upstream`)
 
 > [!NOTE]
 > - Toute action git est **affichée puis confirmée** (`Y/N`). Aucun accès GitHub requis, seulement git.
@@ -81,16 +83,51 @@ python claude_launcher.py -a Perso -- --model opus     # arguments après -- pas
 
 - `-a` : nom, adresse ou id du compte, sans tenir compte de la casse. `Échap` dans le choix du dossier revient quand même au choix du compte
 - Lancement direct : synchro des repos faite, sans worktree
+- `-a` saute aussi l'[écran de restauration](#restauration-des-sessions)
 
 ### Windows Terminal
 
 Le raccourci lance `wt -w claude-launcher new-tab -p "Claude Code"` (nouvel onglet) ou `wt -w new new-tab -p "Claude Code"` (nouvelle fenêtre), selon le choix fait à l'installation, via `pythonw` (sans console) : épinglée, une cible `wt.exe` (alias d'exécution de `WindowsApps`) donne une icône grise. Sans `pythonw`, il cible `wt.exe` directement.
 
+- ♻️ Les sessions restaurées s'ouvrent selon ce même choix : **onglets** de la fenêtre `claude-launcher`, ou **une fenêtre par session**. Sans `terminal_window` dans `config.json` (installation antérieure), onglets de la fenêtre courante
 - 🪟 Mode onglet : chaque lancement ouvre un **nouvel onglet** dans la fenêtre nommée `claude-launcher`, créée si elle n'existe pas. Mode fenêtre : chaque lancement ouvre une **nouvelle fenêtre**
 - 🛡️ Les **autres fenêtres** Windows Terminal ne reçoivent jamais d'onglet du launcher
 - ⌨️ Avec une touche globale sur le raccourci, un nouveau launcher s'ouvre même pendant une session Claude
 - 🔄 Chaque onglet fait sa propre [synchro des repos](#mises-à-jour-au-démarrage)
 - ❌ L'onglet se ferme à la fin de la session (il reste ouvert si le launcher échoue)
+- ⚠️ Garder la **restauration de session de Windows Terminal désactivée** (Paramètres › Démarrage : au démarrage du terminal, ouvrir un onglet avec le profil par défaut, pas les fenêtres de la session précédente) : elle rouvrirait les onglets en double de ceux du launcher
+
+### Restauration des sessions
+
+Une session Claude Code lancée par le launcher est **enregistrée** dans `~/.claude-accounts/sessions_state.json`, puis retirée quand Claude Code se termine normalement (`/exit`, double `Ctrl+C`). Fermer l'onglet ou la fenêtre, ou éteindre le PC, la **conserve** : au lancement suivant, le launcher propose de la restaurer.
+
+Premier écran, avant le choix du compte, **sauté s'il n'y a rien à restaurer** :
+
+| Choix | Effet |
+|-------|-------|
+| `Restore N session(s)` | Ouvre la liste des sessions (N ne compte que les sessions restaurables) |
+| `Start new session` | Oublie les sessions fermées, puis choix du compte |
+
+`Échap` et `Ctrl+C` y quittent le launcher.
+
+Liste : une ligne `[x] compte · projet · worktree` par session, puis la date du dernier message en gris (`AAAA-MM-JJ HH:MM`). Toutes les sessions sont cochées.
+
+| Touche | Action |
+|--------|--------|
+| `↑` `↓` | Sélectionner une session |
+| `Espace` | Cocher ou décocher la session |
+| `Entrée` | **Restaurer** les sessions cochées (aucune cochée : comme `Start new session`) |
+| `Échap` | Revenir au choix `Restore` / `Start new session` |
+| `Ctrl+C` | Quitter |
+
+- ▶️ L'onglet courant reprend la **première** session cochée (`--resume <id>`, dans son compte, son dossier ou son worktree). Chaque autre session s'ouvre dans un nouvel onglet ou une nouvelle fenêtre, selon le [mode choisi à l'installation](#windows-terminal)
+- 🔁 Ces onglets lancent `claude_launcher.py --restore-session <id>` (argument interne, caché de l'aide), sans menu ni synchro des repos, déjà faite par le premier onglet
+- 🪟 Sans Windows Terminal (fenêtre PowerShell) : seule la première session cochée est restaurée
+- 🗑️ Les sessions **décochées**, ou celles d'un `Start new session`, sont oubliées
+- ❓ Une session dont le compte, le dossier, le worktree ou la conversation a disparu n'est pas comptée : affichée **une fois en jaune** dans l'en-tête (`Restore : <libellé>  (<raison>)`), puis oubliée. Une session fermée avant tout message est oubliée sans rien afficher
+- 🛡️ Une session dont le launcher tourne encore (autre onglet) n'est **jamais proposée ni oubliée**. L'entrée garde l'id et l'heure de démarrage du processus du launcher : un id réutilisé après un redémarrage n'est pas pris pour une session en cours
+- 🔒 L'écriture du fichier est protégée par un verrou `sessions_state.lock`, à côté de `sessions_state.json`
+- 🪝 L'id de conversation est suivi par un **hook `SessionStart`** (`session_hook.py`, à la racine du repo), qui le met à jour au démarrage, à `/clear` et à `/resume`. Le launcher le déclare à chaque lancement via `--settings` : contenu de `~/.claude/settings.json` plus le hook, passé en JSON, jamais écrit dans un fichier. Les hooks `SessionStart` déjà présents dans `~/.claude/settings.json` continuent de tourner
 
 ### Choix du compte
 
@@ -245,6 +282,11 @@ Sans repo : étape ignorée. Pour activer, changer ou désactiver : relancer `./
 | `launcher/repo_sync.py` | Synchro des repos au démarrage |
 | `launcher/git_repo.py` | Commandes git (fetch, pull, merge, commit, push) |
 | `launcher/accounts.py` | Comptes : dossiers, jonctions, commande de lancement |
+| `launcher/sessions_state.py` | `sessions_state.json` : sessions ouvertes, tous comptes confondus, avec verrou |
+| `launcher/processes.py` | Processus du launcher : id et heure de démarrage, pour savoir si une session tourne encore |
+| `launcher/session_restore.py` | Sessions restaurables, restauration dans l'onglet courant et les nouveaux onglets ou fenêtres |
+| `launcher/restore_menu.py` | Écran `Restore` / `Start new session` et liste des sessions à restaurer |
+| `session_hook.py` | Hook `SessionStart` : écrit l'id de la conversation courante dans l'entrée de la session |
 | `launcher/launcher_state.py` | `launcher_state.json` : nom, dossier par défaut, favoris |
 | `launcher/account_menu.py` | Menu des comptes et options |
 | `launcher/folder_menu.py` | Choix du dossier : filtre, nouveau dossier, session |
@@ -266,11 +308,11 @@ Non versionnés (`.gitignore`), propres à chaque machine :
 | Fichier | Rôle |
 |---------|------|
 | `*.lnk` | Raccourcis générés par `install.ps1` |
-| `config.json` | Chemin du repo de skills (`skills_repo`, `null` si désactivé) |
+| `config.json` | Chemin du repo de skills (`skills_repo`, `null` si désactivé) et mode d'ouverture des sessions restaurées (`terminal_window` : `claude-launcher` pour des onglets, `new` pour des fenêtres, absent sans Windows Terminal) |
 
 Hors du repo, dans le dossier utilisateur :
 
 | Dossier | Rôle |
 |---------|------|
-| `~/.claude-accounts/` | Comptes et `launcher_state.json` |
+| `~/.claude-accounts/` | Comptes, `launcher_state.json` et `sessions_state.json` (`{"sessions": {"<id d'entrée>": {"account_id", "folder", "worktree", "session_id", "launcher_pid", "launcher_started_at"}}}`) |
 | `~/.claude-worktrees/` | Worktrees (`<id>/<nom>/`, un id par repo) et `worktrees_state.json` (`{"repos": {"<racine du repo>": {"id": "<hex>", "favorite_branches": ["dev", "origin/stage"]}}}`) |

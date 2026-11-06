@@ -59,6 +59,10 @@ def truncate(text, max_length):
     return text[: max_length - 1] + "…"
 
 
+def pluralize(count, noun):
+    return f"{count} {noun}{'s' if count > 1 else ''}"
+
+
 def visible_length(text):
     return len(ANSI_PATTERN.sub("", text))
 

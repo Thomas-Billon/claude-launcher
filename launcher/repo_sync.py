@@ -23,7 +23,7 @@ from pathlib import Path
 from launcher import git_repo
 from launcher.paths import CONFIG_FILE, LAUNCHER_REPO
 from launcher.prompts import ask_commit_message, ask_yes_no
-from launcher.terminal_ui import DARK_GRAY, GREEN, YELLOW, HeaderLine, render_screen
+from launcher.terminal_ui import DARK_GRAY, GREEN, YELLOW, HeaderLine, pluralize, render_screen
 
 INSTALL_WARNINGS_MARKER = "__INSTALL_WARNINGS__"
 
@@ -31,10 +31,6 @@ LAUNCHER_LABEL = "Launcher"
 SKILLS_LABEL = "Skills"
 SKILLS_COMMIT_MESSAGE = "Updated skills"
 BASE_MERGE_MESSAGE = "Merged base repo updates"
-
-
-def pluralize(count, noun):
-    return f"{count} {noun}{'s' if count > 1 else ''}"
 
 
 def describe_new_commits(behind, base_behind):

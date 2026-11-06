@@ -5,11 +5,15 @@ Files and folders used by the launcher, in its repo and in the user's home direc
 from pathlib import Path
 
 LAUNCHER_REPO = Path(__file__).resolve().parent.parent
+LAUNCHER_SCRIPT = LAUNCHER_REPO / "claude_launcher.py"
+# INFO: Run by the SessionStart hook the launcher declares to Claude Code at each launch
+SESSION_HOOK_SCRIPT = LAUNCHER_REPO / "session_hook.py"
 # INFO: Written by install.ps1, not versioned since the skills repo path varies per machine
 CONFIG_FILE = LAUNCHER_REPO / "config.json"
 
 ACCOUNTS_DIR = Path.home() / ".claude-accounts"
 STATE_FILE = ACCOUNTS_DIR / "launcher_state.json"
+SESSIONS_STATE_FILE = ACCOUNTS_DIR / "sessions_state.json"
 
 WORKTREES_DIR = Path.home() / ".claude-worktrees"
 WORKTREES_STATE_FILE = WORKTREES_DIR / "worktrees_state.json"

@@ -87,8 +87,8 @@ def fetch_base(repo):
     return succeeds(repo, "remote", "set-head", "upstream", "--auto", timeout=FETCH_TIMEOUT_SECONDS)
 
 
-def count_commits(repo, revision_range):
-    result = run_git(repo, "rev-list", "--count", revision_range)
+def count_commits(repo, *revisions):
+    result = run_git(repo, "rev-list", "--count", *revisions)
 
     return int(result.stdout.strip()) if result.returncode == 0 else None
 

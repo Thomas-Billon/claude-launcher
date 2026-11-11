@@ -151,7 +151,8 @@ class RepoSync:
         return True
 
     def count_base_commits(self):
-        base_behind = git_repo.count_commits(self.repo, f"HEAD..{git_repo.BASE_BRANCH}")
+        # INFO: Base commits already merged on the remote (e.g. from another machine) come with the pull, they are not counted
+        base_behind = git_repo.count_commits(self.repo, git_repo.BASE_BRANCH, "^HEAD", f"^{git_repo.UPSTREAM_BRANCH}")
 
         if base_behind is None:
             self.report("base check failed", is_warning=True)

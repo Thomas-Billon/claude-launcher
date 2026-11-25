@@ -73,17 +73,20 @@ def find_worktree(entry):
     return next((worktree for worktree in worktrees.load_worktrees(repo) if worktree.path == entry.worktree), None)
 
 
-def find_last_message_date(account, entry, worktree):
-    """Returns the date of the last message of the conversation of the entry, or None before any message."""
+def find_conversation(account, entry, worktree):
+    """Returns the conversation file of the entry, or None before any message."""
     if entry.session_id is None:
         return None
 
-    conversation = history.get_conversation_file(account.config_dir, worktree.repo if worktree else entry.folder, entry.session_id)
+    history_dir = history.get_history_dir(account.config_dir, worktree.repo if worktree else entry.folder)
+    conversation = history.get_conversation_file(history_dir, entry.session_id)
 
-    if not conversation.is_file():
-        return None
+    if history.has_messages(conversation):
+        return conversation
 
-    return datetime.fromtimestamp(conversation.stat().st_mtime)
+    # INFO: A background session started from the conversation inherits the entry variable, so its SessionStart hook
+    # records its own id in the entry. Never started, it holds no message, while the work goes on in the conversation.
+    return history.find_continued_conversation(history_dir, entry.session_id)
 
 
 def examine_entry(entry):
@@ -105,12 +108,14 @@ def examine_entry(entry):
     if entry.worktree and worktree is None:
         return RejectedSession(rejected_label, WORKTREE_NOT_FOUND)
 
-    last_message_at = find_last_message_date(account, entry, worktree)
+    conversation = find_conversation(account, entry, worktree)
 
-    if last_message_at is None:
+    if conversation is None:
         return None
 
-    return RestorableSession(entry.entry_id, account, entry.folder, worktree, entry.session_id, last_message_at)
+    last_message_at = datetime.fromtimestamp(conversation.stat().st_mtime)
+
+    return RestorableSession(entry.entry_id, account, entry.folder, worktree, conversation.stem, last_message_at)
 
 
 def find_restorable_sessions():

@@ -16,7 +16,7 @@ from launcher.session_restore import (
     RestorableSession,
 )
 from launcher.terminal_ui import YELLOW, HeaderLine
-from tests.test_history import write_conversation
+from tests.test_history import mark_continued_in, write_conversation, write_conversation_without_message
 from tests.test_sessions_state import SessionsStateTestCase
 from tests.test_worktrees import WorktreesTestCase
 
@@ -110,6 +110,29 @@ class RestorableTest(SessionRestoreTestCase):
 
     def test_no_entries(self):
         self.assertEqual(session_restore.find_restorable_sessions(), ([], []))
+
+
+class ContinuedSessionTest(SessionRestoreTestCase):
+    def setUp(self):
+        super().setUp()
+        self.history_dir = history.get_history_dir(self.account.config_dir, self.folder)
+
+    def test_background_session_without_message_restores_the_conversation_it_continues(self):
+        self.write_folder_conversation("origin")
+        mark_continued_in(self.history_dir, "origin", "background")
+        write_conversation_without_message(self.history_dir, "background")
+        self.write_entry("e1", "a1b2c3d4", self.folder, session_id="background")
+
+        restorable, _ = session_restore.find_restorable_sessions()
+
+        self.assertEqual([(session.entry_id, session.session_id) for session in restorable], [("e1", "origin")])
+
+    def test_background_session_without_message_nor_origin_is_silently_forgotten(self):
+        write_conversation_without_message(self.history_dir, "background")
+        self.write_entry("e1", "a1b2c3d4", self.folder, session_id="background")
+
+        self.assertEqual(session_restore.find_restorable_sessions(), ([], []))
+        self.assertEqual(self.entry_ids(), set())
 
 
 class RejectedTest(SessionRestoreTestCase):

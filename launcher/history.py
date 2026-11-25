@@ -20,8 +20,8 @@ def get_history_dir(config_dir, folder):
     return config_dir / "projects" / encode_path(folder)
 
 
-def get_conversation_file(config_dir, folder, session_id):
-    return get_history_dir(config_dir, folder) / f"{session_id}.jsonl"
+def get_conversation_file(history_dir, session_id):
+    return history_dir / f"{session_id}.jsonl"
 
 
 def link_worktree_history(config_dir, worktree_path, repo):

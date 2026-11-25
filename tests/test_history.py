@@ -25,6 +25,24 @@ def write_conversation(history_dir, session_id, cwd, age_seconds, has_summary_fi
     os.utime(conversation, (timestamp, timestamp))
 
 
+def write_conversation_without_message(history_dir, session_id):
+    """Writes a conversation file holding only the metadata Claude Code saves, as for a background session never started."""
+    history_dir.mkdir(parents=True, exist_ok=True)
+    lines = [
+        {"type": "ai-title", "aiTitle": "Explain the invoice export", "sessionId": session_id},
+        {"type": "mode", "mode": "normal", "sessionId": session_id},
+    ]
+    history_dir.joinpath(f"{session_id}.jsonl").write_text("".join(json.dumps(line) + "\n" for line in lines), encoding="utf-8")
+
+
+def mark_continued_in(history_dir, session_id, continued_in_session_id):
+    """Adds to a conversation the line Claude Code writes when a new session continues it."""
+    line = {"type": "continued-in", "sessionId": session_id, "continuedInSessionId": continued_in_session_id}
+
+    with history_dir.joinpath(f"{session_id}.jsonl").open("a", encoding="utf-8") as conversation:
+        conversation.write(json.dumps(line) + "\n")
+
+
 class HistoryTestCase(unittest.TestCase):
     def setUp(self):
         temp_dir = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
@@ -136,6 +154,41 @@ class LastSessionTest(HistoryTestCase):
 
     def test_missing_history_gives_none(self):
         self.assertIsNone(history.find_last_session(self.config_dir, self.repo, self.worktree_path))
+
+
+class MessagesTest(HistoryTestCase):
+    def test_conversation_with_a_message_has_messages(self):
+        write_conversation(self.repo_history, "session-1", self.repo, 100, has_summary_first=True)
+
+        self.assertTrue(history.has_messages(self.repo_history / "session-1.jsonl"))
+
+    def test_conversation_with_only_metadata_has_no_message(self):
+        write_conversation_without_message(self.repo_history, "background")
+
+        self.assertFalse(history.has_messages(self.repo_history / "background.jsonl"))
+
+    def test_missing_conversation_has_no_message(self):
+        self.assertFalse(history.has_messages(self.repo_history / "missing.jsonl"))
+
+
+class ContinuedConversationTest(HistoryTestCase):
+    def test_conversation_continued_in_the_session_is_found(self):
+        write_conversation(self.repo_history, "origin", self.repo, 100)
+        mark_continued_in(self.repo_history, "origin", "background")
+        write_conversation(self.repo_history, "unrelated", self.repo, 50)
+        mark_continued_in(self.repo_history, "unrelated", "other-background")
+        write_conversation_without_message(self.repo_history, "background")
+
+        self.assertEqual(history.find_continued_conversation(self.repo_history, "background"), self.repo_history / "origin.jsonl")
+
+    def test_no_conversation_continued_in_the_session_gives_none(self):
+        write_conversation(self.repo_history, "session-1", self.repo, 100)
+        write_conversation_without_message(self.repo_history, "background")
+
+        self.assertIsNone(history.find_continued_conversation(self.repo_history, "background"))
+
+    def test_missing_history_gives_none(self):
+        self.assertIsNone(history.find_continued_conversation(self.repo_history, "background"))
 
 
 class StaleLinkTest(HistoryTestCase):

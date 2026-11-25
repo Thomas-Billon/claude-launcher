@@ -8,6 +8,9 @@ import re
 
 from launcher.junctions import create_junction
 
+MESSAGE_TYPES = ("user", "assistant")
+CONTINUED_IN_TYPE = "continued-in"
+
 
 def encode_path(path):
     return re.sub(r"[^A-Za-z0-9]", "-", str(path))
@@ -38,22 +41,47 @@ def normalize_folder(path):
     return os.path.normcase(os.path.normpath(path))
 
 
-def read_conversation_folder(conversation):
-    """Returns the folder a conversation ran in, from the first line holding a cwd, or None."""
+def read_conversation_lines(conversation):
+    """Yields the JSON objects of the lines of a conversation, skipping invalid lines, nothing when it cannot be read."""
     try:
         with conversation.open(encoding="utf-8") as lines:
             for line in lines:
                 try:
-                    cwd = json.loads(line).get("cwd")
-                except (json.JSONDecodeError, AttributeError):
+                    conversation_line = json.loads(line)
+                except json.JSONDecodeError:
                     continue
 
-                if cwd:
-                    return normalize_folder(cwd)
+                if isinstance(conversation_line, dict):
+                    yield conversation_line
     except OSError:
-        pass
+        return
 
-    return None
+
+def read_conversation_folder(conversation):
+    """Returns the folder a conversation ran in, from the first line holding a cwd, or None."""
+    cwd = next((line["cwd"] for line in read_conversation_lines(conversation) if line.get("cwd")), None)
+
+    return normalize_folder(cwd) if cwd else None
+
+
+def has_messages(conversation):
+    """Returns whether the conversation holds a message: Claude Code refuses to resume a conversation without any."""
+    return any(line.get("type") in MESSAGE_TYPES for line in read_conversation_lines(conversation))
+
+
+def find_continued_conversation(history_dir, session_id):
+    """Returns the conversation of the history continued in the session, or None."""
+    if history_dir.is_dir() == False:
+        return None
+
+    return next((conversation for conversation in history_dir.glob("*.jsonl") if is_continued_in(conversation, session_id)), None)
+
+
+def is_continued_in(conversation, session_id):
+    return any(
+        line.get("type") == CONTINUED_IN_TYPE and line.get("continuedInSessionId") == session_id
+        for line in read_conversation_lines(conversation)
+    )
 
 
 def find_last_session(config_dir, repo, folder):

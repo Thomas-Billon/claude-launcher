@@ -71,7 +71,7 @@ def has_messages(conversation):
 
 def find_continued_conversation(history_dir, session_id):
     """Returns the conversation of the history continued in the session, or None."""
-    if history_dir.is_dir() == False:
+    if not history_dir.is_dir():
         return None
 
     return next((conversation for conversation in history_dir.glob("*.jsonl") if is_continued_in(conversation, session_id)), None)
